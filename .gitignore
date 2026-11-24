@@ -1,0 +1,41 @@
+# Python and Node dependencies and caches
+.aita-venv/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+dist/
+build/
+*.egg-info/
+
+# Local settings, tools and operating-system files
+.env
+.env.*
+!.env.example
+/.agents/
+/.claude/
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+
+# Local course materials, application state and submission artifacts
+/aita/data/
+/aita/FINAL-REPORT.md
+/AI_Tutor_Lab_Starter_English/
+/test_screenshot/
+*.pdf
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*

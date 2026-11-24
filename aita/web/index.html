@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AITA · 個人課程助教</title>
+  <link rel="stylesheet" href="/math/katex.min.css"><link rel="stylesheet" href="/pdfjs/web/pdf_viewer.css"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/view-switch.css">
+  <script defer src="/math/katex.min.js"></script><script defer src="/static/i18n.js"></script><script defer src="/static/app.js"></script><script defer src="/static/reader.js"></script><script defer src="/static/library.js"></script>
+</head>
+<body>
+  <a class="skip" href="#reader">跳到教材</a>
+  <header class="masthead">
+    <a class="brand" href="/">AITA<span>.</span></a>
+    <h1>個人課程助教</h1>
+    <nav aria-label="工作區"><a href="/library" id="library-link">教材庫</a><a href="#library" class="narrow-materials">教材清單</a><a href="#reader">閱讀</a><a href="#tutor">問助教</a></nav>
+    <button id="language-toggle" type="button" aria-label="切換介面語言">English</button>
+    <button id="records-open" type="button">互動紀錄</button>
+    <button id="settings-open" type="button">設定</button>
+  </header>
+  <main id="catalog" tabindex="-1" hidden>
+    <header class="catalog-title"><h2>教材庫</h2><button type="button" id="catalog-import" class="primary">＋ 匯入教材</button></header>
+    <div class="catalog-filters">
+      <label for="library-search">搜尋教材</label><input id="library-search" type="search" placeholder="搜尋名稱或概述">
+      <label for="library-kind">類型</label><select id="library-kind"><option value="">全部教材</option><option value="pdf">原始 PDF</option><option value="note">課程筆記</option><option value="personal">個人筆記</option><option value="text">文字教材</option></select>
+      <button type="button" id="clear-related" hidden>清除相關筆記篩選</button>
+    </div>
+    <div id="catalog-jobs" aria-live="polite"></div>
+    <div id="catalog-documents"></div>
+  </main>
+  <div class="workspace" data-panel="library">
+    <aside id="library" aria-labelledby="library-title">
+      <div class="pane-head"><p class="eyebrow">LIBRARY</p><h2 id="library-title">教材庫</h2></div>
+      <div class="library-actions"><button type="button" id="import-open" class="primary">＋ 匯入教材</button><button type="button" id="folder-open">新增分類</button></div>
+      <div id="jobs" aria-live="polite"></div>
+      <div id="materials" tabindex="-1"></div>
+      <p class="footnote">PDF、Markdown、TXT<br>教材與對話保存在這台電腦。</p>
+    </aside>
+    <main id="reader" tabindex="-1">
+      <div class="reader-tools">
+        <div class="pane-head reader-head"><div><p class="eyebrow">COURSE READER</p><h2 id="doc-title">課程閱讀器</h2></div>
+          <div class="ux u039" id="view-switch" hidden>
+            <div class="u039-tabs" role="tablist" aria-label="閱讀模式">
+              <span class="u039-pill" aria-hidden="true"></span>
+              <button type="button" class="u039-tab" id="original-view" role="tab" aria-selected="true" aria-controls="document">原始 PDF</button>
+              <button type="button" class="u039-tab" id="parsed-view" role="tab" aria-selected="false" aria-controls="document" tabindex="-1">解析內容</button>
+            </div>
+          </div>
+        </div>
+        <div id="reader-actions" hidden>
+          <div id="page-controls" role="group" aria-label="PDF 翻頁" hidden>
+            <button type="button" id="page-prev" aria-label="上一頁">‹</button>
+            <form id="page-go"><input id="page-number" type="number" min="1" aria-label="PDF 實體頁碼" required><span id="page-count"></span></form>
+            <button type="button" id="page-next" aria-label="下一頁">›</button>
+          </div>
+          <button type="button" id="unmapped-page" hidden>頁碼待核</button>
+          <div class="reader-right">
+            <button type="button" id="ask-page">問這一頁</button>
+            <a id="source-link" class="button-link" target="_blank" rel="noopener" hidden>開啟原始 PDF ↗</a>
+            <button type="button" id="reader-notes" hidden>個人筆記</button>
+          </div>
+        </div>
+      </div>
+      <article id="document" aria-label="教材內容" tabindex="-1">
+        <div class="empty"><h3>選擇一份教材</h3><p>閱讀 PDF 或選取教材文字向助教提問。</p></div>
+      </article>
+      <div id="selection-tools" popover="manual" role="group" aria-label="選取文字操作">
+        <div id="mark-styles" role="group" aria-label="畫記樣式"><button type="button" id="mark-text" aria-pressed="true">螢光標記</button><button type="button" id="underline-text" aria-pressed="false">底線</button></div>
+        <div id="mark-colors" role="group" aria-label="畫記顏色"><button type="button" data-color="yellow" aria-label="黃色"></button><button type="button" data-color="green" aria-label="綠色"></button><button type="button" data-color="blue" aria-label="藍色"></button><button type="button" data-color="rose" aria-label="粉紅色"></button></div>
+        <button type="button" id="ask-text" aria-keyshortcuts="Alt+Shift+S">問選取內容</button>
+        <button type="button" id="note-text">加入到筆記</button>
+        <button type="button" id="remove-mark" hidden>移除畫記</button>
+      </div>
+      <span id="reader-status" class="visually-hidden" role="status"></span>
+    </main>
+    <div id="tutor-resize" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="tutor" aria-label="助教欄寬"></div>
+    <section id="tutor" aria-labelledby="tutor-title">
+      <div class="pane-head"><p class="eyebrow">PERSONAL TUTOR</p><h2 id="tutor-title">問助教</h2></div>
+      <div class="chat-nav">
+        <label for="chats">對話</label><select id="chats"><option value="">新對話</option></select>
+        <button id="new-chat" type="button">新增</button>
+      </div>
+      <div id="turns" role="log" aria-label="問答紀錄"><p class="empty-chat">這裡會顯示你的提問、助教回覆與來源。也可以先從教材選一段。</p></div>
+      <form id="ask">
+        <div id="selection" hidden><span id="selection-text"></span><button type="button" id="clear-selection">取消選取</button></div>
+        <label for="mode">教學方式</label>
+        <select id="mode"><option value="hint">先給提示</option><option value="concept">解釋概念</option><option value="debug">協助除錯</option></select>
+        <label for="question">你的問題</label>
+        <textarea id="question" name="question" required maxlength="1450" rows="3" placeholder="例如：為什麼驗證集不能用來估計填補值？"></textarea>
+        <div class="actions"><p id="chat-status" role="status"></p><button class="primary" id="send">送出問題 →</button></div>
+      </form>
+    </section>
+  </div>
+  <p id="error" role="alert" hidden></p>
+  <dialog id="import-dialog" aria-labelledby="import-title">
+    <form id="import-form"><h2 id="import-title">匯入教材</h2>
+      <label for="material-file">教材檔案</label><input id="material-file" type="file" accept=".pdf,.md,.txt" multiple required>
+      <label for="bundle-file">MinerU 解析 ZIP（選填，搭配單一 PDF）</label><input id="bundle-file" type="file" accept=".zip">
+      <label for="original">筆記的原始 PDF（選填）</label><select id="original"><option value="">一般教材</option></select>
+      <label><input id="official" type="checkbox"> 這份來源是教師發布的正式規定</label>
+      <pre id="preview" hidden></pre>
+      <p id="import-status" role="status"></p>
+      <div class="actions"><button type="button" data-close>關閉</button><button class="primary">確認匯入</button></div>
+    </form>
+  </dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <form id="settings-form"><h2 id="settings-title">助教設定</h2>
+      <label for="model">Ollama 模型</label><div class="field-action"><select id="model" required></select><button type="button" id="refresh-models">重新偵測</button></div>
+      <label for="retriever">教材檢索</label><select id="retriever"><option value="tfidf">TF-IDF</option><option value="dense">語意檢索 · BGE-M3</option><option value="hybrid">混合檢索 · RRF</option></select>
+      <label for="preferred-mode">預設教學方式</label><select id="preferred-mode"><option value="hint">先給提示</option><option value="concept">解釋概念</option><option value="debug">協助除錯</option></select>
+      <label for="response-language">回應語言</label><select id="response-language"><option value="zh-Hant">繁體中文</option><option value="en">English</option></select>
+      <p id="settings-status" role="status"></p>
+      <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存設定</button></div>
+    </form>
+  </dialog>
+  <dialog id="records-dialog" aria-labelledby="records-title">
+    <h2 id="records-title">互動紀錄</h2>
+    <form id="records-export">
+      <fieldset><legend>選擇要匯出的紀錄</legend><div id="record-list"></div></fieldset>
+      <pre id="record-view" hidden></pre>
+      <label for="format">匯出格式</label><select id="format"><option value="json">AITA JSON</option><option value="md">Markdown</option></select>
+      <p id="records-status" role="status"></p>
+      <div class="actions"><button type="button" data-close>關閉</button><button class="primary">下載選取的紀錄</button></div>
+    </form>
+  </dialog>
+  <dialog id="folder-dialog" aria-labelledby="folder-title"><form id="folder-form">
+    <h2 id="folder-title">新增分類</h2><label for="folder-name">分類名稱</label><input id="folder-name" required maxlength="80">
+    <label for="folder-parent">上層分類</label><select id="folder-parent"></select><p id="folder-status" role="status"></p>
+    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">新增</button></div>
+  </form></dialog>
+  <dialog id="doc-info-dialog" aria-labelledby="doc-info-title"><form id="doc-info-form">
+    <h2 id="doc-info-title">教材資訊</h2><label for="doc-folder">分類</label><select id="doc-folder"></select>
+    <label for="doc-summary">概述</label><textarea id="doc-summary" maxlength="500" rows="4"></textarea><p id="doc-info-status" role="status"></p>
+    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存</button></div>
+  </form></dialog>
+  <dialog id="notes-dialog" aria-labelledby="notes-title"><form id="notes-form">
+    <h2 id="notes-title">個人筆記</h2><p id="note-source" class="small"></p>
+    <label for="note-picker">已存筆記</label><select id="note-picker"></select>
+    <label for="note-title">筆記標題</label><input id="note-title" required maxlength="160">
+    <div id="note-toolbar" aria-label="Markdown 工具列" role="group">
+      <button type="button" data-markdown="heading">標題</button><button type="button" data-markdown="bold">粗體</button><button type="button" data-markdown="list">清單</button><button type="button" data-markdown="quote">引用</button><button type="button" data-markdown="code">程式碼</button><button type="button" id="preview-note" aria-pressed="false">預覽</button>
+    </div>
+    <label for="note-body">Markdown 內容</label><textarea id="note-body" rows="12" required maxlength="100000"></textarea>
+    <article id="note-preview" aria-label="筆記預覽" hidden></article><p id="note-status" role="status"></p>
+    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存筆記</button></div>
+  </form></dialog>
+</body>
+</html>
