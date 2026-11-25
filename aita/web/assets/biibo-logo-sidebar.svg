@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="BIIBO Sidebar Mark">
+  <defs>
+    <linearGradient id="side-bg" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3FA080"/>
+      <stop offset="100%" stop-color="#1E7358"/>
+    </linearGradient>
+    <clipPath id="side-clip">
+      <rect width="64" height="64" rx="16"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#side-clip)">
+    <rect width="64" height="64" rx="16" fill="url(#side-bg)"/>
+    <path d="M24.8 26.2C23.4 22.2 22 19.6 20.2 17.4" stroke="#FFFDF6" stroke-width="3.8" stroke-linecap="round"/>
+    <path d="M39.2 26.2C40.6 22.2 42 19.6 43.8 17.4" stroke="#FFFDF6" stroke-width="3.8" stroke-linecap="round"/>
+    <circle cx="19.6" cy="15.8" r="4.8" fill="#FFE37E"/>
+    <circle cx="44.4" cy="15.8" r="4.8" fill="#FFE37E"/>
+    <path d="M32 22.2C23.8 22.2 17.8 27.4 16.4 34.2C12.2 35.8 9.8 39.6 9.8 44.2C9.8 50.6 15.6 55 24 55H40C48.4 55 54.2 50.6 54.2 44.2C54.2 39.6 51.8 35.8 47.6 34.2C46.2 27.4 40.2 22.2 32 22.2Z" fill="#FFFDF7"/>
+    <rect x="24.2" y="32.8" width="4.8" height="7.8" rx="2.4" fill="#1A2C26"/>
+    <rect x="35" y="32.8" width="4.8" height="7.8" rx="2.4" fill="#1A2C26"/>
+    <path d="M28.6 42.2C30 44.4 34 44.4 35.4 42.2" stroke="#1A2C26" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M25.5 55C32.8 53.6 35.8 43.6 49 43.6H64V64H25.5V55Z" fill="#63BE9F"/>
+    <path d="M28 55.2C37 57 45.6 56.6 50.4 52.4C53.6 49.6 56 45 60.5 43.6H64V64H25.5L28 55.2Z" fill="#1C7055" fill-opacity="0.52"/>
+  </g>
+</svg>

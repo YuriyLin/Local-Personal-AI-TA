@@ -1,0 +1,30 @@
+{
+  "name": "local-personal-aita",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts",
+    "build": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1",
+    "@types/express": "^5.0.6",
+    "@types/markdown-it": "^14.2.0",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.6.6",
+    "@types/sanitize-html": "^2.16.2",
+    "express": "^5.3.0",
+    "jszip": "^3.10.2",
+    "katex": "^0.19.1",
+    "markdown-it": "^15.0.3",
+    "multer": "^2.5.0",
+    "pdfjs-dist": "^6.5.438",
+    "sanitize-html": "^2.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

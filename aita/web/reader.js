@@ -1,6 +1,7 @@
 "use strict";
 
 const reader = {doc:null, mode:"original", page:1, total:1, target:null, sequence:0, frame:0};
+window.reader = reader;
 const layout = document.querySelector(".workspace");
 const narrow = matchMedia("(max-width: 900px)");
 const readRoot = $("document");
@@ -17,19 +18,136 @@ function saveLocal(key, value) {
   catch { throw Error("瀏覽器無法儲存這項變更。"); }
 }
 
-function showPanel(panel, focus = true) {
-  layout.dataset.panel = panel;
-  for (const a of document.querySelectorAll(".masthead nav a")) {
-    if (a.hash === "#" + panel) a.setAttribute("aria-current", "location");
-    else a.removeAttribute("aria-current");
+const storedPanels = readLocal("biibo-panels", null);
+const panelState = {
+  library: storedPanels?.library !== false,
+  tutor: storedPanels?.tutor !== false
+};
+
+const libraryDivider = $("library-resize");
+let preferredLibraryWidth = readLocal("biibo-library-width", 268);
+if (!Number.isFinite(preferredLibraryWidth)) preferredLibraryWidth = 268;
+let libraryWidth = 268;
+let libraryDrag;
+
+const divider = $("tutor-resize");
+let preferredWidth = readLocal("aita-tutor-width", 390);
+if (!Number.isFinite(preferredWidth)) preferredWidth = 390;
+let width = 390;
+let drag;
+
+function applyLibraryWidth(value) {
+  const max = Math.max(200, Math.min(420, layout.clientWidth - (panelState.tutor ? width : 0) - 280));
+  libraryWidth = Math.round(Math.min(max, Math.max(200, value)));
+  layout.style.setProperty("--library-width", libraryWidth + "px");
+  if (libraryDivider) {
+    libraryDivider.setAttribute("aria-valuemin", "200");
+    libraryDivider.setAttribute("aria-valuemax", String(max));
+    libraryDivider.setAttribute("aria-valuenow", String(libraryWidth));
   }
-  if (!focus) return;
-  const destination = panel === "library" ? ($("materials").querySelector("[aria-current=true]") || $("materials").querySelector("button") || $("import-open"))
-    : panel === "tutor" ? $("question") : $("reader");
-  destination.focus({preventScroll:!narrow.matches});
 }
 
-for (const a of document.querySelectorAll(".masthead nav a,.skip")) {
+function applyWidth(value) {
+  const max = Math.max(300, Math.min(780, layout.clientWidth - (panelState.library ? libraryWidth : 0) - 280));
+  width = Math.round(Math.min(max, Math.max(300, value)));
+  layout.style.setProperty("--tutor-width", width + "px");
+  divider.setAttribute("aria-valuemin", "300");
+  divider.setAttribute("aria-valuemax", String(max));
+  divider.setAttribute("aria-valuenow", String(width));
+}
+
+let rightPaneTab = "tutor";
+
+function syncRightPaneTabs() {
+  const isNotes = rightPaneTab === "notes";
+  const tutorTab = $("right-tab-tutor");
+  const notesTab = $("right-tab-notes");
+  const tutorPanel = $("tutor-panel");
+  const notesPanel = $("notes-panel");
+  if (tutorTab) {
+    tutorTab.setAttribute("aria-selected", String(!isNotes));
+    tutorTab.tabIndex = isNotes ? -1 : 0;
+  }
+  if (notesTab) {
+    notesTab.setAttribute("aria-selected", String(isNotes));
+    notesTab.tabIndex = isNotes ? 0 : -1;
+  }
+  if (tutorPanel) tutorPanel.hidden = isNotes;
+  if (notesPanel) notesPanel.hidden = !isNotes;
+  const readerNotesBtn = $("reader-notes");
+  if (readerNotesBtn) {
+    readerNotesBtn.setAttribute("aria-pressed", String(isNotes && (narrow.matches ? layout.dataset.panel === "tutor" : panelState.tutor)));
+  }
+}
+
+function setRightPaneTab(tab, ensureVisible = false) {
+  rightPaneTab = tab === "notes" ? "notes" : "tutor";
+  if (ensureVisible) {
+    if (narrow.matches) {
+      layout.dataset.panel = "tutor";
+    } else if (!panelState.tutor) {
+      panelState.tutor = true;
+      try { saveLocal("biibo-panels", panelState); } catch { /* Keeps session state. */ }
+    }
+    applyPanelVisibility();
+  } else {
+    syncRightPaneTabs();
+  }
+}
+window.setRightPaneTab = setRightPaneTab;
+window.getRightPaneTab = () => rightPaneTab;
+
+function applyPanelVisibility() {
+  layout.dataset.hideLibrary = String(!panelState.library);
+  layout.dataset.hideReader = "false";
+  layout.dataset.hideTutor = String(!panelState.tutor);
+  for (const btn of document.querySelectorAll(".pane-icon-btn[data-toggle-pane]")) {
+    const pane = btn.dataset.togglePane;
+    btn.setAttribute("aria-pressed", String(Boolean(panelState[pane])));
+  }
+  const currentPanel = layout.dataset.panel || "library";
+  for (const a of document.querySelectorAll(".narrow-nav a")) {
+    if (a.hash === "#" + currentPanel) a.setAttribute("aria-current", "location");
+    else a.removeAttribute("aria-current");
+  }
+  applyLibraryWidth(preferredLibraryWidth);
+  applyWidth(preferredWidth);
+  syncRightPaneTabs();
+}
+
+function toggleDesktopPanel(panel) {
+  if (!(panel in panelState)) return;
+  panelState[panel] = !panelState[panel];
+  try { saveLocal("biibo-panels", panelState); } catch { /* Keeps session state. */ }
+  applyPanelVisibility();
+}
+
+function showPanel(panel, focus = true) {
+  layout.dataset.panel = panel;
+  if (!narrow.matches && panel in panelState && !panelState[panel]) {
+    panelState[panel] = true;
+    try { saveLocal("biibo-panels", panelState); } catch { /* Keeps session state. */ }
+  }
+  applyPanelVisibility();
+  if (!focus) return;
+  const destination = panel === "library" ? ($("materials").querySelector("[aria-current=true]") || $("materials").querySelector("button") || $("import-open"))
+    : panel === "tutor" ? (rightPaneTab === "notes" ? $("note-body") : $("question")) : $("reader");
+  destination?.focus({preventScroll:!narrow.matches});
+}
+
+for (const btn of document.querySelectorAll(".pane-icon-btn[data-toggle-pane]")) {
+  btn.addEventListener("click", () => toggleDesktopPanel(btn.dataset.togglePane));
+}
+$("right-tab-tutor")?.addEventListener("click", () => setRightPaneTab("tutor", true));
+$("right-tab-notes")?.addEventListener("click", () => {
+  const sourceId = typeof originalDocument === "function" ? (originalDocument(reader.doc) || reader.doc?.id || null) : null;
+  if (typeof openNotes === "function") {
+    openNotes(sourceId, "", reader.doc?.note_id || "").catch(report);
+  } else {
+    setRightPaneTab("notes", true);
+  }
+});
+for (const a of document.querySelectorAll(".narrow-nav a,.skip")) {
   a.addEventListener("click", event => {
     if (!["#library","#reader","#tutor"].includes(a.getAttribute("href"))) return;
     event.preventDefault();
@@ -37,24 +155,44 @@ for (const a of document.querySelectorAll(".masthead nav a,.skip")) {
   });
 }
 for (const id of ["library","reader","tutor"]) {
-  $(id).addEventListener("focusin", () => showPanel(id, false));
+  $(id).addEventListener("focusin", () => {
+    if (narrow.matches) showPanel(id, false);
+    else layout.dataset.panel = id;
+  });
 }
 
-const divider = $("tutor-resize");
-let preferredWidth = readLocal("aita-tutor-width", 370);
-if (!Number.isFinite(preferredWidth)) preferredWidth = 370;
-let width;
-let drag;
-function applyWidth(value) {
-  const max = Math.max(300, Math.min(640, layout.clientWidth - 575));
-  width = Math.round(Math.min(max, Math.max(300, value)));
-  layout.style.setProperty("--tutor-width", width + "px");
-  divider.setAttribute("aria-valuemin", "300");
-  divider.setAttribute("aria-valuemax", String(max));
-  divider.setAttribute("aria-valuenow", String(width));
+applyPanelVisibility();
+narrow.addEventListener("change", applyPanelVisibility);
+window.addEventListener("resize", () => {
+  applyLibraryWidth(preferredLibraryWidth);
+  applyWidth(preferredWidth);
+});
+
+if (libraryDivider) {
+  libraryDivider.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    libraryDrag = {x:event.clientX, width:libraryWidth};
+    libraryDivider.setPointerCapture(event.pointerId);
+    libraryDivider.classList.add("dragging");
+    libraryDivider.focus();
+  });
+  libraryDivider.addEventListener("pointermove", event => {
+    if (libraryDrag) applyLibraryWidth(libraryDrag.width + (event.clientX - libraryDrag.x));
+  });
+  libraryDivider.addEventListener("lostpointercapture", () => {
+    if (!libraryDrag) return;
+    libraryDrag = null;
+    libraryDivider.classList.remove("dragging");
+    try { saveLocal("biibo-library-width", preferredLibraryWidth = libraryWidth); } catch (error) { report(error); }
+  });
+  libraryDivider.addEventListener("keydown", event => {
+    if (!["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
+    event.preventDefault();
+    applyLibraryWidth({ArrowLeft:libraryWidth-24, ArrowRight:libraryWidth+24, Home:200, End:420}[event.key]);
+    try { saveLocal("biibo-library-width", preferredLibraryWidth = libraryWidth); } catch (error) { report(error); }
+  });
 }
-applyWidth(preferredWidth);
-window.addEventListener("resize", () => applyWidth(preferredWidth));
+
 divider.addEventListener("pointerdown", event => {
   if (event.button !== 0) return;
   drag = {x:event.clientX, width};
@@ -74,8 +212,60 @@ divider.addEventListener("lostpointercapture", () => {
 divider.addEventListener("keydown", event => {
   if (!["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
   event.preventDefault();
-  applyWidth({ArrowLeft:width+24, ArrowRight:width-24, Home:300, End:640}[event.key]);
+  applyWidth({ArrowLeft:width+24, ArrowRight:width-24, Home:300, End:780}[event.key]);
   try { saveLocal("aita-tutor-width", preferredWidth = width); } catch (error) { report(error); }
+});
+
+/* Center Reader Direct Drag & Drop Upload */
+let readerDropDepth = 0;
+function readerDropzone() { return $("reader-dropzone"); }
+readRoot.addEventListener("dragenter", event => {
+  const zone = readerDropzone();
+  if (!zone || !event.dataTransfer?.types?.includes("Files")) return;
+  event.preventDefault();
+  readerDropDepth++;
+  zone.classList.add("is-dragover");
+  const status = $("reader-drop-status");
+  if (status) status.textContent = tr("放開即可匯入教材");
+});
+readRoot.addEventListener("dragover", event => {
+  const zone = readerDropzone();
+  if (!zone || !event.dataTransfer?.types?.includes("Files")) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  zone.classList.add("is-dragover");
+});
+readRoot.addEventListener("dragleave", () => {
+  const zone = readerDropzone();
+  if (!zone) return;
+  readerDropDepth = Math.max(0, readerDropDepth - 1);
+  if (!readerDropDepth) {
+    zone.classList.remove("is-dragover");
+    const status = $("reader-drop-status");
+    if (status) status.textContent = tr("拖曳檔案到此處，或點擊左側「＋ 匯入教材」");
+  }
+});
+readRoot.addEventListener("drop", async event => {
+  const zone = readerDropzone();
+  if (!zone || !event.dataTransfer?.files?.length) return;
+  event.preventDefault();
+  readerDropDepth = 0;
+  zone.classList.remove("is-dragover");
+  const status = $("reader-drop-status");
+  const files = [...event.dataTransfer.files];
+  const supported = files.filter(f => /\.(pdf|md|txt)$/i.test(f.name));
+  if (!supported.length) {
+    if (status) status.textContent = tr("僅支援 PDF、Markdown 或 TXT 檔案。");
+    return;
+  }
+  if (status) status.textContent = tr("正在匯入拖曳的檔案…");
+  try {
+    await uploadMaterialFiles(supported);
+    if (status) status.textContent = tr("匯入完成");
+  } catch (error) {
+    if (status) status.textContent = friendlyError(error, "匯入教材失敗，請確認檔案格式為 PDF、Markdown 或 TXT 後再試。");
+    report(error, "匯入教材失敗，請確認檔案格式為 PDF、Markdown 或 TXT 後再試。");
+  }
 });
 
 function syncSelection() {
@@ -113,6 +303,10 @@ async function openDocument(key, target) {
   document.querySelectorAll(".doc-link").forEach(n => n.setAttribute("aria-current",String(n.dataset.key === key)));
   showPanel("reader");
   renderReader();
+  if (typeof renderPromptChips === "function") renderPromptChips();
+  if (rightPaneTab === "notes" && typeof window.syncNotesWithReader === "function") {
+    window.syncNotesWithReader();
+  }
 }
 
 function syncReader() {
@@ -141,8 +335,22 @@ function syncReader() {
   const sourcePage = pdf && !unmapped ? page : target?.page;
   source.hidden = !pdf && !doc.original_id;
   source.href = `/api/documents/${doc.original_id || doc.id}/pdf` + (sourcePage ? `#page=${sourcePage}` : "");
-  $("reader-notes").hidden = !pdf && !doc.original_id;
-  $("reader-notes").textContent = tr(doc.kind === "personal" ? "開啟筆記編輯器" : "個人筆記");
+  $("reader-notes").hidden = false;
+  const quizBtn = $("reader-quiz");
+  if (quizBtn) {
+    quizBtn.hidden = doc.kind === "personal";
+  }
+  const notesLabel = $("reader-notes-label");
+  if (notesLabel) notesLabel.textContent = tr(doc.kind === "personal" ? "編輯筆記" : "個人筆記");
+  const pageInsertBtn = $("note-insert-page");
+  if (pageInsertBtn) {
+    pageInsertBtn.hidden = !pdf || unmapped;
+    if (pdf && !unmapped) pageInsertBtn.textContent = `P.${page}`;
+  }
+  syncRightPaneTabs();
+  if (typeof window.onReaderContextChange === "function") {
+    window.onReaderContextChange();
+  }
   if (pdf) {
     try { saveLocal(`aita-reading:${doc.id}`,{mode,page,total}); } catch { /* The current page remains usable. */ }
   }
@@ -320,10 +528,14 @@ function useReaderScope(quote = "", blocks = []) {
   setSelection({document_id:reader.doc.id, page, blocks, quote:snippet},
     label + (snippet ? ` · ${snippet.slice(0,90)}${snippet.length > 90 ? "…" : ""}` : ""));
   clearTextSelection();
+  setRightPaneTab("tutor", true);
   showPanel("tutor");
 }
 $("ask-page").onclick = () => useReaderScope();
-$("reader-notes").onclick = () => openNotes(originalDocument(reader.doc),"",reader.doc.note_id).catch(report);
+$("reader-notes").onclick = () => {
+  const sourceId = originalDocument(reader.doc) || reader.doc?.id || null;
+  openNotes(sourceId, "", reader.doc?.note_id || "").catch(report);
+};
 document.addEventListener("aita-language",() => {
   if (reader.doc) { syncReader(); positionViewPill(); }
 });
@@ -368,7 +580,7 @@ function showTextTools(selection, x, y) {
   activeText = selection;
   if (selection.kind) markStyle = selection.kind;
   $("mark-styles").hidden = $("mark-colors").hidden = !CSS.highlights;
-  $("note-text").hidden = !originalDocument(reader.doc);
+  $("note-text").hidden = !reader.doc;
   $("remove-mark").hidden = selection.index == null;
   $("mark-text").setAttribute("aria-pressed",String(markStyle === "highlight"));
   $("underline-text").setAttribute("aria-pressed",String(markStyle === "underline"));
@@ -435,7 +647,7 @@ $("note-text").onclick = () => {
     reader.doc.blocks[activeText.blocks[0]]?.page;
   const snippet = `## ${tr("引用")}` + (page ? `\n<!-- page: ${page} -->` : "") + `\n\n${quoteLines(activeText.quote)}`;
   clearTextSelection();
-  openNotes(originalDocument(reader.doc),snippet).catch(report);
+  openNotes(originalDocument(reader.doc) || reader.doc?.id || null, snippet).catch(report);
 };
 
 function markKey() {

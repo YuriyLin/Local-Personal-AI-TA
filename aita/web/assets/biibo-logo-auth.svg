@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 104" fill="none" role="img" aria-label="BIIBO — Your Personal Tutor.">
+  <defs>
+    <linearGradient id="auth-bg" x1="12" y1="8" x2="88" y2="94" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#45A686"/>
+      <stop offset="54%" stop-color="#288769"/>
+      <stop offset="100%" stop-color="#196A50"/>
+    </linearGradient>
+    <linearGradient id="auth-cloud" x1="48" y1="34" x2="48" y2="83" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="72%" stop-color="#FFFDF5"/>
+      <stop offset="100%" stop-color="#F2ECE0"/>
+    </linearGradient>
+    <radialGradient id="auth-orb" cx="38%" cy="32%" r="65%">
+      <stop offset="0%" stop-color="#FFF4B5"/>
+      <stop offset="58%" stop-color="#FFE37E"/>
+      <stop offset="100%" stop-color="#F6C852"/>
+    </radialGradient>
+    <linearGradient id="auth-curl" x1="44" y1="68" x2="90" y2="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6CC4A7"/>
+      <stop offset="50%" stop-color="#4AA789"/>
+      <stop offset="100%" stop-color="#1D7257"/>
+    </linearGradient>
+    <clipPath id="auth-tile">
+      <rect x="4" y="8" width="88" height="88" rx="22"/>
+    </clipPath>
+  </defs>
+
+  <!-- Brand Icon Mark -->
+  <g clip-path="url(#auth-tile)">
+    <rect x="4" y="8" width="88" height="88" rx="22" fill="url(#auth-bg)"/>
+    <rect x="4.8" y="8.8" width="86.4" height="86.4" rx="21.2" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="1.2"/>
+    <path d="M38.4 43.6C36.6 38.4 34.8 35 32.6 32.2" stroke="#FFFDF6" stroke-width="4.6" stroke-linecap="round"/>
+    <path d="M57.6 43.6C59.4 38.4 61.2 35 63.4 32.2" stroke="#FFFDF6" stroke-width="4.6" stroke-linecap="round"/>
+    <circle cx="32.2" cy="30.4" r="6" fill="url(#auth-orb)"/>
+    <circle cx="63.8" cy="30.4" r="6" fill="url(#auth-orb)"/>
+    <path d="M48 38.4C37.1 38.4 29.2 45.2 27.3 54.5C21.7 56.6 18.6 61.7 18.6 67.7C18.6 76.5 26.1 82.8 37.1 82.8H58.9C69.9 82.8 77.4 76.5 77.4 67.7C77.4 61.7 74.3 56.6 68.7 54.5C66.8 45.2 58.9 38.4 48 38.4Z" fill="url(#auth-cloud)"/>
+    <rect x="37.9" y="53.1" width="6.3" height="10" rx="3.15" fill="#1C2E28"/>
+    <rect x="51.8" y="53.1" width="6.3" height="10" rx="3.15" fill="#1C2E28"/>
+    <path d="M43.6 64.9C45.2 67.8 50.8 67.8 52.4 64.9" stroke="#1C2E28" stroke-width="3.1" stroke-linecap="round"/>
+    <path d="M39.2 82.8C49.1 81 52.8 67.8 71.1 67.8H92V96H39.2V82.8Z" fill="url(#auth-curl)"/>
+    <path d="M42.2 83.2C54 85.4 65.6 85 72.2 79.5C77 75.5 80.3 69.2 86.9 67.8H92V96H39.2L42.2 83.2Z" fill="#18684F" fill-opacity="0.46"/>
+  </g>
+
+  <!-- Two-tone Brand Wordmark (BII ink + BO brand green) & Tagline -->
+  <text x="110" y="57" font-family="'Quicksand', 'Zen Maru Gothic', sans-serif" font-size="38" font-weight="700" letter-spacing="2.2">
+    <tspan fill="#1F2926">BII</tspan><tspan fill="#2D8F74">BO</tspan>
+  </text>
+  <text x="112" y="80" font-family="'Quicksand', 'Zen Maru Gothic', sans-serif" font-size="14.5" font-weight="600" letter-spacing="0.4" fill="#5B6B65">Your Personal Tutor.</text>
+</svg>

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none" role="img" aria-label="BIIBO Logo">
+  <defs>
+    <linearGradient id="biibo-bg" x1="14" y1="10" x2="108" y2="114" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#45A686"/>
+      <stop offset="52%" stop-color="#288769"/>
+      <stop offset="100%" stop-color="#196A50"/>
+    </linearGradient>
+    <radialGradient id="biibo-sheen" cx="26%" cy="18%" r="62%">
+      <stop offset="0%" stop-color="#8FE2C6" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#288769" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="biibo-cloud" x1="60" y1="42" x2="60" y2="103" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="70%" stop-color="#FFFDF5"/>
+      <stop offset="100%" stop-color="#F2ECE0"/>
+    </linearGradient>
+    <radialGradient id="biibo-orb" cx="38%" cy="32%" r="65%">
+      <stop offset="0%" stop-color="#FFF4B5"/>
+      <stop offset="55%" stop-color="#FFE37E"/>
+      <stop offset="100%" stop-color="#F6C852"/>
+    </radialGradient>
+    <linearGradient id="biibo-curl" x1="60" y1="84" x2="112" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6CC4A7"/>
+      <stop offset="48%" stop-color="#4AA789"/>
+      <stop offset="100%" stop-color="#1D7257"/>
+    </linearGradient>
+    <clipPath id="biibo-clip">
+      <rect width="120" height="120" rx="30"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#biibo-clip)">
+    <rect width="120" height="120" rx="30" fill="url(#biibo-bg)"/>
+    <rect width="120" height="120" rx="30" fill="url(#biibo-sheen)"/>
+    <rect x="1" y="1" width="118" height="118" rx="29" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="1.5"/>
+    <path d="M47 48.5C44.5 41.5 42 36.8 39 33" stroke="#FFFDF6" stroke-width="6.2" stroke-linecap="round"/>
+    <path d="M73 48.5C75.5 41.5 78 36.8 81 33" stroke="#FFFDF6" stroke-width="6.2" stroke-linecap="round"/>
+    <circle cx="38.5" cy="30.5" r="8.2" fill="url(#biibo-orb)"/>
+    <circle cx="81.5" cy="30.5" r="8.2" fill="url(#biibo-orb)"/>
+    <path d="M60 41.5C45.2 41.5 34.4 50.8 31.8 63.4C24.2 66.2 20 73.2 20 81.4C20 93.4 30.2 102 45.2 102H74.8C89.8 102 100 93.4 100 81.4C100 73.2 95.8 66.2 88.2 63.4C85.6 50.8 74.8 41.5 60 41.5Z" fill="url(#biibo-cloud)"/>
+    <rect x="46.2" y="61.5" width="8.6" height="13.6" rx="4.3" fill="#1C2E28"/>
+    <rect x="65.2" y="61.5" width="8.6" height="13.6" rx="4.3" fill="#1C2E28"/>
+    <path d="M54 77.6C56.2 81.6 63.8 81.6 66 77.6" stroke="#1C2E28" stroke-width="4.2" stroke-linecap="round"/>
+    <path d="M47 102C60 100 66 80 90 80H108V86C96 96 86 105 64 105H47Z" fill="#14523E" fill-opacity="0.16"/>
+    <path d="M48 102C61.5 99.5 66.5 81.5 91.5 81.5H120V120H48V102Z" fill="url(#biibo-curl)"/>
+    <path d="M52 102.5C68 105.5 84 105 93 97.5C99.5 92 104 83.5 113 81.5H120V120H48L52 102.5Z" fill="#18684F" fill-opacity="0.48"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+{
+  "name": "AITA · 個人課程助教",
+  "description": "Course reader and personal AI tutor with PDF.js viewing, Markdown notes, TF-IDF retrieval, citations, and interaction record export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

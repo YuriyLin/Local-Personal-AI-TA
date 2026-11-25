@@ -2,25 +2,57 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AITA · 個人課程助教</title>
+  <title>BIIBO · Your Personal Tutor.</title>
+  <meta name="description" content="BIIBO — Your Personal Tutor. Modern EdTech course reader and AI tutor with PDF.js viewing, Markdown notes, TF-IDF retrieval, citations, and interaction record export.">
+  <meta property="og:title" content="BIIBO · Your Personal Tutor.">
+  <meta property="og:description" content="BIIBO — Your Personal Tutor. Modern EdTech course reader and AI tutor with PDF.js viewing, Markdown notes, TF-IDF retrieval, citations, and interaction record export.">
+  <link rel="icon" type="image/svg+xml" href="/static/assets/biibo-logo-favicon.svg">
+  <link rel="apple-touch-icon" href="/static/assets/biibo-logo-icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Quicksand:wght@400;500;600;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap">
   <link rel="stylesheet" href="/math/katex.min.css"><link rel="stylesheet" href="/pdfjs/web/pdf_viewer.css"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/view-switch.css">
-  <script defer src="/math/katex.min.js"></script><script defer src="/static/i18n.js"></script><script defer src="/static/app.js"></script><script defer src="/static/reader.js"></script><script defer src="/static/library.js"></script>
+  <script defer src="/math/katex.min.js"></script><script defer src="/static/i18n.js"></script><script defer src="/static/app.js"></script><script defer src="/static/reader.js"></script><script defer src="/static/library.js"></script><script defer src="/static/study.js"></script>
 </head>
 <body>
   <a class="skip" href="#reader">跳到教材</a>
   <header class="masthead">
-    <a class="brand" href="/">AITA<span>.</span></a>
-    <h1>個人課程助教</h1>
-    <nav aria-label="工作區"><a href="/library" id="library-link">教材庫</a><a href="#library" class="narrow-materials">教材清單</a><a href="#reader">閱讀</a><a href="#tutor">問助教</a></nav>
-    <button id="language-toggle" type="button" aria-label="切換介面語言">English</button>
-    <button id="records-open" type="button">互動紀錄</button>
-    <button id="settings-open" type="button">設定</button>
+    <div class="masthead-left">
+      <a class="brand" href="/" aria-label="BIIBO">
+        <img class="brand-logo" src="/static/assets/biibo-logo-navbar.svg" alt="BIIBO Logo" width="36" height="36" referrerpolicy="no-referrer">
+        <span class="brand-wordmark">BII<span class="brand-wordmark-accent">BO</span></span>
+      </a>
+    </div>
+    <h1 class="visually-hidden">BIIBO · 個人課程助教</h1>
+    <nav class="narrow-nav" aria-label="工作區">
+      <a href="#library">教材清單</a>
+      <a href="#reader">閱讀</a>
+      <a href="#tutor">問助教</a>
+    </nav>
+    <div class="masthead-actions">
+      <a href="/library" id="library-link" class="ghost-btn nav-link-btn">教材庫</a>
+      <button id="language-toggle" type="button" class="ghost-btn" aria-label="切換介面語言">English</button>
+      <button id="records-open" type="button" class="ghost-btn">對話管理</button>
+      <button id="settings-open" type="button" class="ghost-btn">設定</button>
+    </div>
   </header>
   <main id="catalog" tabindex="-1" hidden>
-    <header class="catalog-title"><h2>教材庫</h2><button type="button" id="catalog-import" class="primary">＋ 匯入教材</button></header>
+    <header class="catalog-title">
+      <div class="catalog-heading">
+        <p class="brand-tagline">Your Personal Tutor.</p>
+        <h2>教材庫</h2>
+      </div>
+      <button type="button" id="catalog-import" class="primary">＋ 匯入教材</button>
+    </header>
     <div class="catalog-filters">
-      <label for="library-search">搜尋教材</label><input id="library-search" type="search" placeholder="搜尋名稱或概述">
-      <label for="library-kind">類型</label><select id="library-kind"><option value="">全部教材</option><option value="pdf">原始 PDF</option><option value="note">課程筆記</option><option value="personal">個人筆記</option><option value="text">文字教材</option></select>
+      <div class="filter-group filter-search">
+        <label for="library-search">搜尋教材</label>
+        <input id="library-search" type="search" placeholder="搜尋名稱或概述">
+      </div>
+      <div class="filter-group filter-kind">
+        <label for="library-kind">類型</label>
+        <select id="library-kind"><option value="">全部教材</option><option value="pdf">原始 PDF</option><option value="note">課程筆記</option><option value="personal">個人筆記</option><option value="text">文字教材</option></select>
+      </div>
       <button type="button" id="clear-related" hidden>清除相關筆記篩選</button>
     </div>
     <div id="catalog-jobs" aria-live="polite"></div>
@@ -28,15 +60,43 @@
   </main>
   <div class="workspace" data-panel="library">
     <aside id="library" aria-labelledby="library-title">
-      <div class="pane-head"><p class="eyebrow">LIBRARY</p><h2 id="library-title">教材庫</h2></div>
-      <div class="library-actions"><button type="button" id="import-open" class="primary">＋ 匯入教材</button><button type="button" id="folder-open">新增分類</button></div>
+      <div class="pane-head sidebar-head">
+        <h2 id="library-title">教材庫</h2>
+        <button type="button" id="toggle-library-pane" class="pane-icon-btn pane-collapse-btn" data-toggle-pane="library" aria-pressed="true" aria-label="收合左側欄" title="收合左側欄">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect class="pane-icon-fill" x="3.5" y="4.5" width="5.5" height="15" rx="1.5" stroke="none"/>
+            <rect x="3" y="4" width="18" height="16" rx="3"/>
+            <path d="M9 4v16"/>
+          </svg>
+        </button>
+      </div>
+      <div class="library-actions">
+        <button type="button" id="import-open" class="primary">＋ 匯入教材</button>
+        <button type="button" id="folder-open">新增分類</button>
+        <button type="button" id="syllabus-open" class="syllabus-action-btn">課綱規劃</button>
+      </div>
       <div id="jobs" aria-live="polite"></div>
+      <section id="syllabus-panel" class="syllabus-panel" aria-label="課綱規劃" hidden></section>
       <div id="materials" tabindex="-1"></div>
-      <p class="footnote">PDF、Markdown、TXT<br>教材與對話保存在這台電腦。</p>
+      <div class="sidebar-brand-foot">
+        <img class="sidebar-brand-mark" src="/static/assets/biibo-logo-sidebar.svg" alt="" width="22" height="22" aria-hidden="true" referrerpolicy="no-referrer">
+        <p class="footnote">PDF、Markdown、TXT<br>教材與對話保存在這台電腦。</p>
+      </div>
     </aside>
+    <div id="library-resize" class="pane-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="library" aria-label="教材庫欄寬"></div>
     <main id="reader" tabindex="-1">
       <div class="reader-tools">
-        <div class="pane-head reader-head"><div><p class="eyebrow">COURSE READER</p><h2 id="doc-title">課程閱讀器</h2></div>
+        <div class="pane-head reader-head">
+          <button type="button" id="expand-library-pane" class="pane-icon-btn pane-expand-btn" data-toggle-pane="library" aria-pressed="false" aria-label="展開左側欄" title="展開左側欄">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect class="pane-icon-fill" x="3.5" y="4.5" width="5.5" height="15" rx="1.5" stroke="none"/>
+              <rect x="3" y="4" width="18" height="16" rx="3"/>
+              <path d="M9 4v16"/>
+            </svg>
+          </button>
+          <div class="reader-title-wrap">
+            <h2 id="doc-title">課程閱讀器</h2>
+          </div>
           <div class="ux u039" id="view-switch" hidden>
             <div class="u039-tabs" role="tablist" aria-label="閱讀模式">
               <span class="u039-pill" aria-hidden="true"></span>
@@ -44,6 +104,13 @@
               <button type="button" class="u039-tab" id="parsed-view" role="tab" aria-selected="false" aria-controls="document" tabindex="-1">解析內容</button>
             </div>
           </div>
+          <button type="button" id="expand-tutor-pane" class="pane-icon-btn pane-expand-btn" data-toggle-pane="tutor" aria-pressed="false" aria-label="展開右側欄" title="展開右側欄">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect class="pane-icon-fill" x="15" y="4.5" width="5.5" height="15" rx="1.5" stroke="none"/>
+              <rect x="3" y="4" width="18" height="16" rx="3"/>
+              <path d="M15 4v16"/>
+            </svg>
+          </button>
         </div>
         <div id="reader-actions" hidden>
           <div id="page-controls" role="group" aria-label="PDF 翻頁" hidden>
@@ -53,94 +120,520 @@
           </div>
           <button type="button" id="unmapped-page" hidden>頁碼待核</button>
           <div class="reader-right">
-            <button type="button" id="ask-page">問這一頁</button>
+            <button type="button" id="ask-page" class="mint-tint">問這一頁</button>
+            <button type="button" id="reader-quiz" class="reader-quiz-btn" hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M9.5 9.5a2.5 2.5 0 0 1 4.6 1.3c0 1.7-2.1 2.1-2.1 3.4"/>
+                <line x1="12" y1="17.2" x2="12.01" y2="17.2"/>
+              </svg>
+              <span>課後自測</span>
+            </button>
             <a id="source-link" class="button-link" target="_blank" rel="noopener" hidden>開啟原始 PDF ↗</a>
-            <button type="button" id="reader-notes" hidden>個人筆記</button>
+            <button type="button" id="reader-notes" class="reader-notes-btn" aria-pressed="false" hidden>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                <path d="M8 7h8"/><path d="M8 11h6"/>
+              </svg>
+              <span id="reader-notes-label">個人筆記</span>
+            </button>
           </div>
         </div>
       </div>
+      <div id="quiz-paused-bar" class="quiz-paused-bar" role="status" hidden>
+        <button type="button" id="quiz-resume-main" class="quiz-paused-trigger">
+          <span class="quiz-paused-dot" aria-hidden="true"></span>
+          <span id="quiz-paused-text">測驗暫停中 · 點此繼續</span>
+        </button>
+        <button type="button" id="quiz-discard-btn" class="quiz-paused-close" aria-label="結束測驗">結束</button>
+      </div>
       <article id="document" aria-label="教材內容" tabindex="-1">
-        <div class="empty"><h3>選擇一份教材</h3><p>閱讀 PDF 或選取教材文字向助教提問。</p></div>
+        <div class="empty reader-dropzone" id="reader-dropzone" role="region" aria-label="拖曳上傳教材區">
+          <div class="mascot-loop-frame mascot-reader-loop" aria-hidden="true">
+            <video class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-reader-empty.jpg">
+              <source src="/static/assets/biibo-reader-idle.mp4" type="video/mp4">
+            </video>
+          </div>
+          <h3>直接將教材檔案拖曳至此</h3>
+          <p>支援 PDF、Markdown（.md）與 TXT，放開即可匯入閱讀；也可以從左側教材庫選擇既有教材。</p>
+          <p class="dropzone-hint" id="reader-drop-status" aria-live="polite">拖曳檔案到此處，或點擊左側「＋ 匯入教材」</p>
+        </div>
       </article>
       <div id="selection-tools" popover="manual" role="group" aria-label="選取文字操作">
         <div id="mark-styles" role="group" aria-label="畫記樣式"><button type="button" id="mark-text" aria-pressed="true">螢光標記</button><button type="button" id="underline-text" aria-pressed="false">底線</button></div>
         <div id="mark-colors" role="group" aria-label="畫記顏色"><button type="button" data-color="yellow" aria-label="黃色"></button><button type="button" data-color="green" aria-label="綠色"></button><button type="button" data-color="blue" aria-label="藍色"></button><button type="button" data-color="rose" aria-label="粉紅色"></button></div>
-        <button type="button" id="ask-text" aria-keyshortcuts="Alt+Shift+S">問選取內容</button>
+        <button type="button" id="ask-text" class="mint-tint" aria-keyshortcuts="Alt+Shift+S">問選取內容</button>
         <button type="button" id="note-text">加入到筆記</button>
         <button type="button" id="remove-mark" hidden>移除畫記</button>
       </div>
       <span id="reader-status" class="visually-hidden" role="status"></span>
     </main>
-    <div id="tutor-resize" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="tutor" aria-label="助教欄寬"></div>
+    <div id="tutor-resize" class="pane-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="tutor" aria-label="助教欄寬"></div>
     <section id="tutor" aria-labelledby="tutor-title">
-      <div class="pane-head"><p class="eyebrow">PERSONAL TUTOR</p><h2 id="tutor-title">問助教</h2></div>
-      <div class="chat-nav">
-        <label for="chats">對話</label><select id="chats"><option value="">新對話</option></select>
-        <button id="new-chat" type="button">新增</button>
+      <div class="right-pane-head">
+        <div class="right-pane-tabs" role="tablist" aria-label="右側工作區">
+          <button type="button" id="right-tab-tutor" class="right-pane-tab" role="tab" aria-selected="true" aria-controls="tutor-panel">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span>問助教</span>
+          </button>
+          <button type="button" id="right-tab-notes" class="right-pane-tab" role="tab" aria-selected="false" aria-controls="notes-panel" tabindex="-1">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+              <path d="M8 7h8"/><path d="M8 11h6"/>
+            </svg>
+            <span>個人筆記</span>
+          </button>
+        </div>
+        <button type="button" id="toggle-tutor-pane" class="pane-icon-btn pane-collapse-btn" data-toggle-pane="tutor" aria-pressed="true" aria-label="收合右側欄" title="收合右側欄">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect class="pane-icon-fill" x="15" y="4.5" width="5.5" height="15" rx="1.5" stroke="none"/>
+            <rect x="3" y="4" width="18" height="16" rx="3"/>
+            <path d="M15 4v16"/>
+          </svg>
+        </button>
       </div>
-      <div id="turns" role="log" aria-label="問答紀錄"><p class="empty-chat">這裡會顯示你的提問、助教回覆與來源。也可以先從教材選一段。</p></div>
-      <form id="ask">
-        <div id="selection" hidden><span id="selection-text"></span><button type="button" id="clear-selection">取消選取</button></div>
-        <label for="mode">教學方式</label>
-        <select id="mode"><option value="hint">先給提示</option><option value="concept">解釋概念</option><option value="debug">協助除錯</option></select>
-        <label for="question">你的問題</label>
-        <textarea id="question" name="question" required maxlength="1450" rows="3" placeholder="例如：為什麼驗證集不能用來估計填補值？"></textarea>
-        <div class="actions"><p id="chat-status" role="status"></p><button class="primary" id="send">送出問題 →</button></div>
-      </form>
+      <div id="tutor-panel" class="right-pane-view" role="tabpanel" aria-labelledby="right-tab-tutor">
+        <div class="pane-head tutor-head">
+          <div class="tutor-identity">
+            <span class="biibo-avatar-ring">
+              <img class="biibo-avatar" src="/static/assets/biibo-mascot.png" alt="BIIBO 頭像" width="38" height="38" referrerpolicy="no-referrer" onerror="this.style.display='none'">
+            </span>
+            <div class="tutor-heading-text">
+              <h2 id="tutor-title">BIIBO</h2>
+              <p class="tutor-sub">Your Personal Tutor.</p>
+            </div>
+            <button type="button" id="model-status-badge" class="model-status" data-state="checking" title="點擊開啟模型設定">
+              <span class="model-dot" aria-hidden="true"></span>
+              <span class="model-status-text" id="model-status-text">偵測模型中…</span>
+            </button>
+          </div>
+        </div>
+        <div class="chat-nav">
+          <label for="chats" class="visually-hidden">對話</label>
+          <select id="chats" aria-label="對話"><option value="">新對話</option></select>
+          <button id="new-chat" type="button">新增</button>
+        </div>
+        <div id="week-preview-banner" class="week-preview-banner" hidden>
+          <div class="week-preview-head">
+            <div class="week-preview-meta">
+              <span id="week-preview-kicker" class="week-preview-kicker"></span>
+              <h3 id="week-preview-title"></h3>
+            </div>
+            <button type="button" id="week-preview-close" class="week-preview-close" aria-label="關閉">×</button>
+          </div>
+          <p id="week-preview-desc" class="week-preview-desc"></p>
+          <div class="week-preview-actions">
+            <button type="button" id="week-preview-go" class="primary">先幫我預習本週核心觀念</button>
+            <button type="button" id="week-preview-upload">上傳本週講義</button>
+          </div>
+        </div>
+        <div id="turns" role="log" aria-label="問答紀錄">
+          <div class="empty-chat-card">
+            <div class="empty-art empty-art-tutor">
+              <video class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-tutor-welcome.jpg" aria-label="BIIBO 微笑歡迎提問">
+                <source src="/static/assets/biibo-tutor-welcome.mp4?v=2" type="video/mp4">
+              </video>
+            </div>
+            <h3>開始與 BIIBO 一起學習</h3>
+            <p class="empty-chat">這裡會顯示你的提問、助教回覆與來源。也可以先從教材選一段。</p>
+            <div class="prompt-chips" id="prompt-chips" role="group" aria-label="建議提問"></div>
+          </div>
+        </div>
+        <form id="ask">
+          <div id="selection" hidden><span id="selection-text"></span><button type="button" id="clear-selection">取消選取</button></div>
+          <div class="ask-input-shell">
+            <label for="question" class="visually-hidden">你的問題</label>
+            <textarea id="question" name="question" required maxlength="1450" rows="3" placeholder="例如：為什麼驗證集不能用來估計填補值？"></textarea>
+            <div class="ask-footer">
+              <div class="mode-wrap">
+                <label for="mode" class="visually-hidden">教學方式</label>
+                <select id="mode" aria-label="教學方式"><option value="hint">先給提示</option><option value="concept">解釋概念</option><option value="debug">協助除錯</option></select>
+              </div>
+              <button class="primary" id="send">送出問題 →</button>
+            </div>
+          </div>
+          <div class="actions"><p id="chat-status" role="status"></p></div>
+        </form>
+      </div>
+      <div id="notes-panel" class="right-pane-view" role="tabpanel" aria-labelledby="right-tab-notes" hidden>
+        <form id="notes-form" class="notes-studio">
+          <div class="notes-studio-head">
+            <div class="notes-source-wrap">
+              <span class="notes-source-dot" aria-hidden="true"></span>
+              <p id="note-source" class="notes-source-text">獨立筆記</p>
+            </div>
+            <div class="notes-head-actions">
+              <button type="button" id="note-draft-toggle" class="note-draft-btn" aria-expanded="false" aria-controls="note-draft-drawer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z"/>
+                  <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"/>
+                </svg>
+                <span>BIIBO 幫你寫草稿</span>
+              </button>
+              <button type="button" id="note-new" class="notes-icon-btn" title="新增筆記" aria-label="新增筆記">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+              </button>
+              <button type="button" id="note-export" class="notes-icon-btn" title="匯出 Markdown" aria-label="匯出 Markdown">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </button>
+              <button type="button" id="note-delete" class="notes-icon-btn notes-icon-danger" title="刪除筆記" aria-label="刪除筆記" hidden>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="notes-meta-bar">
+            <label for="note-picker" class="visually-hidden">已存筆記</label>
+            <select id="note-picker" aria-label="已存筆記"><option value="">新增筆記</option></select>
+            <label for="note-title" class="visually-hidden">筆記標題</label>
+            <input id="note-title" type="text" required maxlength="160" placeholder="輸入筆記標題…">
+          </div>
+          <div id="note-draft-drawer" class="note-draft-drawer" hidden>
+            <div class="note-draft-controls">
+              <div class="note-draft-scope" role="group" aria-label="草稿範圍">
+                <button type="button" class="draft-scope-btn" data-draft-scope="page" aria-pressed="true" id="draft-scope-page">目前頁面</button>
+                <button type="button" class="draft-scope-btn" data-draft-scope="full" aria-pressed="false" id="draft-scope-full">整份教材</button>
+              </div>
+              <div class="note-draft-style-wrap">
+                <label for="draft-style" class="visually-hidden">草稿格式</label>
+                <select id="draft-style" aria-label="草稿格式">
+                  <option value="structured">結構化重點整理</option>
+                  <option value="formulas">公式與推導整理</option>
+                  <option value="cheatsheet">考前速記表</option>
+                </select>
+              </div>
+              <button type="button" id="draft-generate-btn" class="primary">生成草稿</button>
+            </div>
+            <p id="draft-status" class="note-draft-status" role="status"></p>
+            <div id="note-draft-preview-wrap" class="note-draft-preview-wrap" hidden>
+              <div class="note-draft-preview-head">
+                <span id="draft-preview-meta" class="note-draft-preview-meta"></span>
+                <div class="note-draft-preview-tabs" role="group" aria-label="草稿預覽模式">
+                  <button type="button" data-draft-view="rendered" aria-pressed="true">預覽</button>
+                  <button type="button" data-draft-view="raw" aria-pressed="false">原始碼</button>
+                </div>
+              </div>
+              <div id="draft-preview-rendered" class="note-draft-preview-body"></div>
+              <pre id="draft-preview-raw" class="note-draft-preview-raw" hidden></pre>
+              <div class="note-draft-preview-actions">
+                <button type="button" id="draft-insert-cursor" class="primary">插入游標位置</button>
+                <button type="button" id="draft-append-end">附加到筆記尾端</button>
+                <button type="button" id="draft-regenerate">重新生成</button>
+                <button type="button" id="draft-discard">關閉</button>
+              </div>
+            </div>
+          </div>
+          <div class="notes-editor-bar">
+            <div id="note-toolbar" class="notes-md-toolbar" role="toolbar" aria-label="Markdown 工具列">
+              <button type="button" data-markdown="h1" title="大標題 (H1)">H1</button>
+              <button type="button" data-markdown="h2" title="中標題 (H2)">H2</button>
+              <button type="button" data-markdown="h3" title="小標題 (H3)">H3</button>
+              <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" data-markdown="bold" title="粗體 (Ctrl+B)"><strong>B</strong></button>
+              <button type="button" data-markdown="italic" title="斜體 (Ctrl+I)"><em>I</em></button>
+              <button type="button" data-markdown="strike" title="刪除線"><s>S</s></button>
+              <button type="button" data-markdown="code" title="行內程式碼"><code>`</code></button>
+              <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" data-markdown="list" title="項目清單" aria-label="項目清單">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              </button>
+              <button type="button" data-markdown="olist" title="編號清單" aria-label="編號清單">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg>
+              </button>
+              <button type="button" data-markdown="task" title="待辦核取清單" aria-label="待辦核取清單">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              </button>
+              <button type="button" data-markdown="quote" title="引用區塊" aria-label="引用區塊">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>
+              </button>
+              <button type="button" data-markdown="codeblock" title="程式碼區塊" aria-label="程式碼區塊">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              </button>
+              <button type="button" data-markdown="math" title="數學公式 (LaTeX)">∑</button>
+              <button type="button" data-markdown="table" title="插入表格" aria-label="插入表格">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+              </button>
+              <button type="button" data-markdown="link" title="插入連結" aria-label="插入連結">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              </button>
+              <button type="button" data-markdown="hr" title="分隔線">—</button>
+              <button type="button" id="note-insert-page" class="toolbar-page-btn" data-markdown="page" title="插入目前 PDF 頁碼標記" hidden>P.1</button>
+            </div>
+            <div class="note-view-modes" role="group" aria-label="筆記檢視模式">
+              <button type="button" data-note-view="edit" aria-pressed="true">編輯</button>
+              <button type="button" data-note-view="split" aria-pressed="false">雙欄</button>
+              <button type="button" data-note-view="preview" aria-pressed="false">預覽</button>
+            </div>
+          </div>
+          <div id="notes-workspace" class="notes-workspace" data-view="edit">
+            <div class="notes-editor-pane">
+              <label for="note-body" class="visually-hidden">Markdown 內容</label>
+              <textarea id="note-body" required maxlength="100000" placeholder="使用 Markdown 撰寫論文與課程筆記，支援 $LaTeX$ 公式、表格、待辦清單與引用…"></textarea>
+            </div>
+            <div class="notes-preview-pane">
+              <article id="note-preview" class="notes-preview-article" aria-label="筆記預覽"></article>
+            </div>
+          </div>
+          <div class="notes-footer">
+            <div class="notes-footer-meta">
+              <span id="note-word-count" class="notes-counter">0 字</span>
+              <span id="note-status" class="notes-status" role="status"></span>
+            </div>
+            <button type="submit" id="note-save" class="primary">儲存筆記</button>
+          </div>
+        </form>
+      </div>
     </section>
   </div>
   <p id="error" role="alert" hidden></p>
   <dialog id="import-dialog" aria-labelledby="import-title">
-    <form id="import-form"><h2 id="import-title">匯入教材</h2>
-      <label for="material-file">教材檔案</label><input id="material-file" type="file" accept=".pdf,.md,.txt" multiple required>
-      <label for="bundle-file">MinerU 解析 ZIP（選填，搭配單一 PDF）</label><input id="bundle-file" type="file" accept=".zip">
-      <label for="original">筆記的原始 PDF（選填）</label><select id="original"><option value="">一般教材</option></select>
-      <label><input id="official" type="checkbox"> 這份來源是教師發布的正式規定</label>
+    <form id="import-form">
+      <div class="dialog-head"><h2 id="import-title">匯入教材</h2></div>
+      <label for="material-file">教材檔案</label>
+      <label class="file-picker" id="import-dropzone" for="material-file">
+        <input id="material-file" class="file-picker-input" type="file" accept=".pdf,.md,.txt" multiple required>
+        <span class="file-picker-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4"/>
+            <path d="m7 9 5-5 5 5"/>
+            <path d="M20 16.5V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5"/>
+          </svg>
+        </span>
+        <span class="file-picker-body">
+          <span class="file-picker-action">選擇檔案或拖曳至此</span>
+          <span class="file-picker-meta" id="material-file-name">支援 PDF、Markdown、TXT（可多選）</span>
+        </span>
+      </label>
+      <div id="import-folder-rec" class="import-folder-rec" hidden></div>
+      <label id="import-folder-label" for="import-folder">歸檔分類（選填）</label><select id="import-folder"><option value="">未分類</option></select>
+      <label id="import-original-label" for="original">筆記的原始 PDF（選填）</label><select id="original"><option value="">一般教材</option></select>
+      <label id="import-official-wrap" class="checkbox-row"><input id="official" type="checkbox"> <span>這份來源是教師發布的正式規定</span></label>
       <pre id="preview" hidden></pre>
       <p id="import-status" role="status"></p>
       <div class="actions"><button type="button" data-close>關閉</button><button class="primary">確認匯入</button></div>
     </form>
   </dialog>
-  <dialog id="settings-dialog" aria-labelledby="settings-title">
-    <form id="settings-form"><h2 id="settings-title">助教設定</h2>
-      <label for="model">Ollama 模型</label><div class="field-action"><select id="model" required></select><button type="button" id="refresh-models">重新偵測</button></div>
-      <label for="retriever">教材檢索</label><select id="retriever"><option value="tfidf">TF-IDF</option><option value="dense">語意檢索 · BGE-M3</option><option value="hybrid">混合檢索 · RRF</option></select>
-      <label for="preferred-mode">預設教學方式</label><select id="preferred-mode"><option value="hint">先給提示</option><option value="concept">解釋概念</option><option value="debug">協助除錯</option></select>
-      <label for="response-language">回應語言</label><select id="response-language"><option value="zh-Hant">繁體中文</option><option value="en">English</option></select>
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+    <form id="settings-form">
+      <div class="dialog-head"><h2 id="settings-title">助教設定</h2></div>
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <span class="settings-section-title">AI 模型引擎</span>
+          <button type="button" id="refresh-models" class="settings-inline-btn">重新偵測</button>
+        </div>
+        <div class="engine-group-tabs" role="tablist" aria-label="模型引擎類型">
+          <button type="button" class="engine-group-tab" data-engine-group="local" role="tab" aria-selected="true">本地模型</button>
+          <button type="button" class="engine-group-tab" data-engine-group="cli" role="tab" aria-selected="false">本機 CLI</button>
+          <button type="button" class="engine-group-tab" data-engine-group="cloud" role="tab" aria-selected="false">雲端 API</button>
+        </div>
+        <div id="engine-provider-grid" class="engine-provider-grid" role="radiogroup" aria-label="模型引擎來源"></div>
+        <p id="engine-hint" class="engine-hint"></p>
+        <label for="model" id="model-label">使用模型</label>
+        <div class="field-action">
+          <select id="model" required></select>
+          <button type="button" id="test-engine">測試連線</button>
+        </div>
+        <div id="custom-model-wrap" class="custom-model-wrap" hidden>
+          <label for="custom-model">自訂模型名稱</label>
+          <input id="custom-model" type="text" maxlength="120" placeholder="例如：llama3.2:3b、gpt-4.1、claude-sonnet-4-20250514">
+        </div>
+      </div>
+      <div class="settings-divider" aria-hidden="true"></div>
+      <div class="settings-prefs-grid">
+        <div class="settings-field">
+          <label for="retriever">教材檢索</label>
+          <select id="retriever"><option value="tfidf">TF-IDF</option><option value="dense">語意檢索 · BGE-M3</option><option value="hybrid">混合檢索 · RRF</option></select>
+        </div>
+        <div class="settings-field">
+          <label for="preferred-mode">預設教學方式</label>
+          <select id="preferred-mode"><option value="hint">先給提示</option><option value="concept">解釋概念</option><option value="debug">協助除錯</option></select>
+        </div>
+        <div class="settings-field">
+          <label for="response-language">回應語言</label>
+          <select id="response-language"><option value="zh-Hant">繁體中文</option><option value="en">English</option></select>
+        </div>
+      </div>
       <p id="settings-status" role="status"></p>
       <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存設定</button></div>
     </form>
   </dialog>
   <dialog id="records-dialog" aria-labelledby="records-title">
-    <h2 id="records-title">互動紀錄</h2>
+    <div class="dialog-head"><h2 id="records-title">對話管理</h2></div>
     <form id="records-export">
-      <fieldset><legend>選擇要匯出的紀錄</legend><div id="record-list"></div></fieldset>
+      <fieldset>
+        <legend>管理已儲存的對話</legend>
+        <div class="records-bar" id="records-bar" hidden>
+          <label class="checkbox-row records-select-all">
+            <input type="checkbox" id="record-select-all">
+            <span>全選</span>
+          </label>
+          <span id="record-selected-count" class="records-selected-count">已選 0 筆</span>
+        </div>
+        <div id="record-list"></div>
+      </fieldset>
       <pre id="record-view" hidden></pre>
       <label for="format">匯出格式</label><select id="format"><option value="json">AITA JSON</option><option value="md">Markdown</option></select>
       <p id="records-status" role="status"></p>
-      <div class="actions"><button type="button" data-close>關閉</button><button class="primary">下載選取的紀錄</button></div>
+      <div class="actions records-actions">
+        <button type="button" id="records-delete" class="danger-btn" disabled>批量刪除</button>
+        <div class="records-actions-right">
+          <button type="button" data-close>關閉</button>
+          <button class="primary" id="records-export-btn">批量匯出</button>
+        </div>
+      </div>
     </form>
   </dialog>
   <dialog id="folder-dialog" aria-labelledby="folder-title"><form id="folder-form">
-    <h2 id="folder-title">新增分類</h2><label for="folder-name">分類名稱</label><input id="folder-name" required maxlength="80">
+    <div class="dialog-head"><h2 id="folder-title">新增分類</h2></div>
+    <label for="folder-kind">所屬區塊</label>
+    <select id="folder-kind"><option value="course">課程教材</option><option value="personal">個人筆記</option></select>
+    <label for="folder-name">分類名稱</label><input id="folder-name" required maxlength="80">
     <label for="folder-parent">上層分類</label><select id="folder-parent"></select><p id="folder-status" role="status"></p>
     <div class="actions"><button type="button" data-close>關閉</button><button class="primary">新增</button></div>
   </form></dialog>
   <dialog id="doc-info-dialog" aria-labelledby="doc-info-title"><form id="doc-info-form">
-    <h2 id="doc-info-title">教材資訊</h2><label for="doc-folder">分類</label><select id="doc-folder"></select>
+    <div class="dialog-head"><h2 id="doc-info-title">教材資訊</h2></div>
+    <label for="doc-folder">分類</label><select id="doc-folder"></select>
     <label for="doc-summary">概述</label><textarea id="doc-summary" maxlength="500" rows="4"></textarea><p id="doc-info-status" role="status"></p>
     <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存</button></div>
   </form></dialog>
-  <dialog id="notes-dialog" aria-labelledby="notes-title"><form id="notes-form">
-    <h2 id="notes-title">個人筆記</h2><p id="note-source" class="small"></p>
-    <label for="note-picker">已存筆記</label><select id="note-picker"></select>
-    <label for="note-title">筆記標題</label><input id="note-title" required maxlength="160">
-    <div id="note-toolbar" aria-label="Markdown 工具列" role="group">
-      <button type="button" data-markdown="heading">標題</button><button type="button" data-markdown="bold">粗體</button><button type="button" data-markdown="list">清單</button><button type="button" data-markdown="quote">引用</button><button type="button" data-markdown="code">程式碼</button><button type="button" id="preview-note" aria-pressed="false">預覽</button>
+  <dialog id="syllabus-dialog" class="study-dialog" aria-labelledby="syllabus-dialog-title">
+    <form id="syllabus-form">
+      <div class="dialog-head">
+        <h2 id="syllabus-dialog-title">上傳課程大綱 · AI 初步規劃</h2>
+      </div>
+      <p class="dialog-lead">上傳 PDF 或課綱截圖後，由 BIIBO 讀取內容並建立授課週次分類與置頂總覽筆記；放假、純考試與互評週會自動略過空資料夾，不誤報缺講義。</p>
+      <label for="syllabus-file">課綱檔案或截圖（PDF / 圖片 / MD / TXT）</label>
+      <label class="file-picker" id="syllabus-dropzone" for="syllabus-file">
+        <input id="syllabus-file" class="file-picker-input" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.md,.txt">
+        <span class="file-picker-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <path d="M14 2v6h6"/>
+            <path d="M8 13h8"/><path d="M8 17h5"/>
+          </svg>
+        </span>
+        <span class="file-picker-body">
+          <span class="file-picker-action">選擇檔案、圖片或拖曳至此</span>
+          <span class="file-picker-meta" id="syllabus-file-name">支援 PDF、PNG/JPG/WebP 截圖、Markdown、TXT</span>
+        </span>
+      </label>
+      <div class="syllabus-text-head">
+        <label for="syllabus-text">或直接貼上課綱文字／剪貼簿截圖（Ctrl+V / Cmd+V）</label>
+        <button type="button" id="syllabus-paste-btn" class="syllabus-paste-btn">貼上剪貼簿圖片</button>
+      </div>
+      <textarea id="syllabus-text" rows="5" maxlength="80000" placeholder="可直接按 Ctrl+V / Cmd+V 貼上課綱截圖，或貼上文字例如：&#10;Week 1 課程介紹與資料前處理&#10;Week 4 教師節放假&#10;Week 9 期中考 (Midterm)…"></textarea>
+      <div id="syllabus-image-preview" class="syllabus-image-preview" hidden>
+        <img id="syllabus-preview-img" class="syllabus-preview-thumb" alt="課綱圖片預覽">
+        <div class="syllabus-preview-info">
+          <span id="syllabus-preview-name" class="syllabus-preview-name"></span>
+          <span id="syllabus-preview-meta" class="syllabus-preview-meta"></span>
+        </div>
+        <button type="button" id="syllabus-preview-clear" class="syllabus-preview-clear">移除圖片</button>
+      </div>
+      <ol id="syllabus-stages" class="syllabus-stages" hidden>
+        <li data-stage="1">由 BIIBO 讀取課綱內容，整理每週主題、假日與考試時程</li>
+        <li data-stage="2">僅為授課週自動建立分類資料夾，並置頂完整「課程總覽筆記」</li>
+        <li data-stage="3">追蹤授課週講義缺口，並啟用預習／考前複習引導</li>
+      </ol>
+      <p id="syllabus-status" role="status"></p>
+      <div class="actions">
+        <button type="button" data-close>關閉</button>
+        <button type="submit" id="syllabus-submit" class="primary">開始 AI 規劃</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="quiz-dialog" class="quiz-dialog" aria-labelledby="quiz-dialog-title">
+    <div class="quiz-shell">
+      <header class="quiz-head">
+        <div>
+          <h2 id="quiz-dialog-title">課後自測 Q&amp;A</h2>
+          <p id="quiz-doc-name" class="quiz-doc-name"></p>
+        </div>
+        <button type="button" id="quiz-close-btn" class="quiz-close-icon" aria-label="關閉">×</button>
+      </header>
+      <div id="quiz-setup" class="quiz-setup">
+        <div class="quiz-setup-row">
+          <div class="quiz-option-group">
+            <span class="quiz-setup-label">測驗範圍</span>
+            <div class="quiz-seg-group" role="group" aria-label="測驗範圍">
+              <button type="button" data-quiz-scope="page" aria-pressed="true" id="quiz-scope-page">目前頁面</button>
+              <button type="button" data-quiz-scope="full" aria-pressed="false" id="quiz-scope-full">整份 PDF</button>
+            </div>
+          </div>
+          <div class="quiz-option-group">
+            <span class="quiz-setup-label">題數</span>
+            <div class="quiz-seg-group" role="group" aria-label="題數">
+              <button type="button" data-quiz-count="3" aria-pressed="true">3 題</button>
+              <button type="button" data-quiz-count="5" aria-pressed="false">5 題</button>
+            </div>
+          </div>
+        </div>
+        <p class="quiz-setup-hint">由 BIIBO 幫你出題，卡關可先看解題提示，並附上原文頁碼；中途跳回講義對照時會自動保留作答進度。</p>
+        <p id="quiz-status" role="status"></p>
+        <div class="actions">
+          <button type="button" data-close>關閉</button>
+          <button type="button" id="quiz-start-btn" class="primary">開始出題</button>
+        </div>
+      </div>
+      <div id="quiz-loading" class="quiz-loading" hidden>
+        <div class="quiz-loading-art" aria-hidden="true">
+          <video class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-tutor-thinking.jpg">
+            <source src="/static/assets/biibo-tutor-thinking.mp4" type="video/mp4">
+          </video>
+        </div>
+        <p id="quiz-loading-text" class="quiz-loading-text">BIIBO 正在閱讀教材並為你設計自測題…</p>
+      </div>
+      <div id="quiz-stage" class="quiz-stage" hidden>
+        <div class="quiz-progress-row">
+          <span id="quiz-progress-label" class="quiz-progress-label">1 / 3</span>
+          <span id="quiz-concept-label" class="quiz-concept-label"></span>
+        </div>
+        <div class="quiz-progress-track" aria-hidden="true"><div id="quiz-progress-fill" class="quiz-progress-fill"></div></div>
+        <div id="quiz-stem" class="quiz-stem"></div>
+        <div id="quiz-options" class="quiz-options" role="radiogroup" aria-label="測驗選項"></div>
+        <div class="quiz-assist-row">
+          <button type="button" id="quiz-hint-btn" class="quiz-hint-btn">先看提示</button>
+          <span id="quiz-page-meta" class="quiz-page-meta"></span>
+        </div>
+        <div id="quiz-hint-box" class="quiz-hint-box" hidden></div>
+        <div id="quiz-feedback" class="quiz-feedback" hidden>
+          <div id="quiz-feedback-head" class="quiz-feedback-head"></div>
+          <div id="quiz-feedback-body" class="quiz-feedback-body"></div>
+          <div class="quiz-feedback-actions">
+            <button type="button" id="quiz-jump-page" hidden>對照原文</button>
+            <button type="button" id="quiz-clip-note">收入個人筆記</button>
+          </div>
+        </div>
+        <div class="quiz-stage-footer">
+          <button type="button" id="quiz-reset-btn">重新設定</button>
+          <button type="button" id="quiz-next-btn" class="primary" disabled>下一題 →</button>
+        </div>
+      </div>
+      <div id="quiz-summary" class="quiz-summary" hidden>
+        <div class="quiz-score-head">
+          <p class="quiz-score-kicker">測驗完成</p>
+          <h3 id="quiz-score-value" class="quiz-score-value"></h3>
+          <p id="quiz-score-desc" class="quiz-score-desc"></p>
+        </div>
+        <div id="quiz-weak-wrap" class="quiz-weak-wrap" hidden>
+          <h4>建議再複習的概念</h4>
+          <ul id="quiz-weak-list" class="quiz-weak-list"></ul>
+        </div>
+        <div class="quiz-summary-actions">
+          <button type="button" id="quiz-mistakes-note">把錯題加入筆記</button>
+          <button type="button" id="quiz-ask-weak" class="primary">針對弱點問 BIIBO</button>
+          <button type="button" id="quiz-retry-btn">再測一次</button>
+        </div>
+        <div id="quiz-autoclose-bar" class="quiz-autoclose-bar">
+          <span id="quiz-autoclose-text"></span>
+          <button type="button" id="quiz-stay-btn">保持開啟</button>
+        </div>
+      </div>
     </div>
-    <label for="note-body">Markdown 內容</label><textarea id="note-body" rows="12" required maxlength="100000"></textarea>
-    <article id="note-preview" aria-label="筆記預覽" hidden></article><p id="note-status" role="status"></p>
-    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存筆記</button></div>
-  </form></dialog>
+  </dialog>
 </body>
 </html>

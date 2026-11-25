@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="BIIBO Favicon">
+  <defs>
+    <linearGradient id="fav-bg" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3FA181"/>
+      <stop offset="100%" stop-color="#1A6E53"/>
+    </linearGradient>
+    <clipPath id="fav-clip">
+      <rect width="64" height="64" rx="16"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#fav-clip)">
+    <rect width="64" height="64" rx="16" fill="url(#fav-bg)"/>
+    <!-- Boosted geometry for crisp 16px-32px browser tab legibility -->
+    <path d="M24 25.5L18.8 16.5" stroke="#FFFDF7" stroke-width="4.6" stroke-linecap="round"/>
+    <path d="M40 25.5L45.2 16.5" stroke="#FFFDF7" stroke-width="4.6" stroke-linecap="round"/>
+    <circle cx="18.2" cy="14.8" r="5.6" fill="#FFE37C"/>
+    <circle cx="45.8" cy="14.8" r="5.6" fill="#FFE37C"/>
+    <path d="M32 21.5C23 21.5 16.5 27 15 34.2C10.4 36 8 40 8 45C8 51.8 14.2 56.5 23.2 56.5H40.8C49.8 56.5 56 51.8 56 45C56 40 53.6 36 49 34.2C47.5 27 41 21.5 32 21.5Z" fill="#FFFDF7"/>
+    <rect x="23.2" y="32.5" width="5.4" height="8.6" rx="2.7" fill="#182A24"/>
+    <rect x="35.4" y="32.5" width="5.4" height="8.6" rx="2.7" fill="#182A24"/>
+    <path d="M28.2 43.2C29.8 45.8 34.2 45.8 35.8 43.2" stroke="#182A24" stroke-width="3.1" stroke-linecap="round"/>
+    <path d="M27 56.5C34.2 55 37 45 50 45H64V64H27V56.5Z" fill="#68C4A5"/>
+  </g>
+</svg>
