@@ -171,6 +171,27 @@ export interface CourseExamMilestone {
   notes: string;
 }
 
+export const COURSE_COLOR_IDS = [
+  'mint',
+  'lavender',
+  'amber',
+  'slate',
+  'rose',
+  'sage',
+  'indigo',
+  'terracotta',
+] as const;
+
+export type CourseColorId = (typeof COURSE_COLOR_IDS)[number];
+
+export interface CourseSchedule {
+  color: CourseColorId;
+  weekdays: number[];
+  start_date_override: string | null;
+  location: string;
+  manual_override?: boolean;
+}
+
 export interface CoursePlanRecord {
   id: string;
   root_folder_id: string | null;
@@ -182,6 +203,26 @@ export interface CoursePlanRecord {
   overview_document_id: string | null;
   weeks: CourseWeekPlan[];
   exams: CourseExamMilestone[];
+  schedule?: CourseSchedule;
+  updated_at: string;
+}
+
+export interface CalendarSettings {
+  semester_start_date: string | null;
+}
+
+export type CalendarEventCategory = 'todo' | 'deadline' | 'exam' | 'reminder';
+
+export interface CalendarEventRecord {
+  id: string;
+  title: string;
+  date: string;
+  time: string;
+  category: CalendarEventCategory;
+  course_id: string | null;
+  notes: string;
+  completed: boolean;
+  created_at: string;
   updated_at: string;
 }
 
@@ -199,6 +240,10 @@ export const store = {
   documentInfo: new Map<string, DocumentInfoRecord>(),
   personalNotes: new Map<string, PersonalNoteRecord>(),
   coursePlans: new Map<string, CoursePlanRecord>(),
+  calendarSettings: {
+    semester_start_date: null,
+  } as CalendarSettings,
+  calendarEvents: new Map<string, CalendarEventRecord>(),
   settings: {
     mode: 'hint',
     provider: 'ollama',
@@ -243,6 +288,8 @@ interface PersistedStore {
   settings: Preferences;
   coursePlans?: CoursePlanRecord[];
   coursePlan?: Omit<CoursePlanRecord, 'id' | 'root_folder_id'> | null;
+  calendarSettings?: CalendarSettings;
+  calendarEvents?: CalendarEventRecord[];
   folders: FolderRecord[];
   documentInfo: DocumentInfoRecord[];
   personalNotes: PersonalNoteRecord[];
@@ -395,6 +442,8 @@ function buildPersistSnapshot(): { snapshot: PersistedStore; activeBlobs: Set<st
     nextSeq: store.nextSeq,
     settings: store.settings,
     coursePlans: [...store.coursePlans.values()],
+    calendarSettings: store.calendarSettings,
+    calendarEvents: [...store.calendarEvents.values()],
     folders: [...store.folders.values()],
     documentInfo: [...store.documentInfo.values()],
     personalNotes: [...store.personalNotes.values()],
@@ -645,9 +694,33 @@ export function loadStore(): boolean {
     }
 
     store.coursePlans.clear();
+    const isIsoDate = (v: unknown): v is string =>
+      typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const normalizeLoadedSchedule = (raw: unknown, index: number): CourseSchedule => {
+      const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+      const color: CourseColorId =
+        typeof obj.color === 'string' && (COURSE_COLOR_IDS as readonly string[]).includes(obj.color)
+          ? (obj.color as CourseColorId)
+          : COURSE_COLOR_IDS[index % COURSE_COLOR_IDS.length];
+      const rawDays = Array.isArray(obj.weekdays)
+        ? [...new Set(obj.weekdays.filter((d): d is number => typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 6))].sort((a, b) => a - b)
+        : [];
+      const weekdays = rawDays.length ? rawDays : [1];
+      const startOverride = isIsoDate(obj.start_date_override) ? obj.start_date_override : null;
+      const location = typeof obj.location === 'string' ? obj.location.trim().slice(0, 120) : '';
+      const manualOverride = Boolean(obj.manual_override);
+      return { color, weekdays, start_date_override: startOverride, location, manual_override: manualOverride };
+    };
+
     if (Array.isArray(data.coursePlans)) {
+      let idx = 0;
       for (const plan of data.coursePlans) {
-        if (plan?.id && Array.isArray(plan.weeks)) store.coursePlans.set(plan.id, plan);
+        if (plan?.id && Array.isArray(plan.weeks)) {
+          store.coursePlans.set(plan.id, {
+            ...plan,
+            schedule: normalizeLoadedSchedule(plan.schedule, idx++),
+          });
+        }
       }
     } else if (data.coursePlan && Array.isArray(data.coursePlan.weeks)) {
       const legacy = data.coursePlan;
@@ -660,7 +733,43 @@ export function loadStore(): boolean {
       if (!store.folders.has(root)) {
         store.folders.set(root, { id: root, name: legacy.course_title, parent_id: null });
       }
-      store.coursePlans.set('legacy-course', { ...legacy, id: 'legacy-course', root_folder_id: root });
+      store.coursePlans.set('legacy-course', {
+        ...legacy,
+        id: 'legacy-course',
+        root_folder_id: root,
+        schedule: normalizeLoadedSchedule(legacy.schedule, 0),
+      });
+    }
+
+    store.calendarSettings = {
+      semester_start_date: isIsoDate(data.calendarSettings?.semester_start_date)
+        ? data.calendarSettings!.semester_start_date
+        : null,
+    };
+
+    store.calendarEvents.clear();
+    if (Array.isArray(data.calendarEvents)) {
+      const validCategories = new Set<CalendarEventCategory>(['todo', 'deadline', 'exam', 'reminder']);
+      for (const evt of data.calendarEvents) {
+        if (!evt || typeof evt.id !== 'string' || typeof evt.title !== 'string' || !isIsoDate(evt.date)) continue;
+        const category: CalendarEventCategory = validCategories.has(evt.category as CalendarEventCategory)
+          ? (evt.category as CalendarEventCategory)
+          : 'todo';
+        const time = typeof evt.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(evt.time) ? evt.time : '';
+        const courseId = typeof evt.course_id === 'string' && store.coursePlans.has(evt.course_id) ? evt.course_id : null;
+        store.calendarEvents.set(evt.id, {
+          id: evt.id,
+          title: evt.title.trim().slice(0, 120),
+          date: evt.date,
+          time,
+          category,
+          course_id: courseId,
+          notes: typeof evt.notes === 'string' ? evt.notes.trim().slice(0, 500) : '',
+          completed: Boolean(evt.completed),
+          created_at: typeof evt.created_at === 'string' ? evt.created_at : new Date().toISOString(),
+          updated_at: typeof evt.updated_at === 'string' ? evt.updated_at : new Date().toISOString(),
+        });
+      }
     }
 
     if (typeof data.nextTurnId === 'number' && data.nextTurnId > 0) {

@@ -1257,7 +1257,14 @@ const customSelectSyncers = [];
 let openSelectCloser = null;
 
 function syncAllCustomSelects() {
-  for (const sync of customSelectSyncers) sync();
+  for (let i = customSelectSyncers.length - 1; i >= 0; i--) {
+    const entry = customSelectSyncers[i];
+    if (!entry.select.isConnected) {
+      customSelectSyncers.splice(i, 1);
+      continue;
+    }
+    entry.sync();
+  }
 }
 
 function enhanceBrandSelect(select) {
@@ -1294,7 +1301,14 @@ function enhanceBrandSelect(select) {
 
   const sync = () => {
     const selected = select.options[select.selectedIndex] || select.options[0];
-    labelSpan.textContent = selected ? selected.textContent : "";
+    labelSpan.replaceChildren();
+    if (selected?.dataset?.dot) {
+      const dot = element("span", undefined, "biibo-option-dot");
+      dot.style.backgroundColor = selected.dataset.dot;
+      dot.setAttribute("aria-hidden", "true");
+      labelSpan.append(dot);
+    }
+    labelSpan.append(document.createTextNode(selected ? selected.textContent : ""));
     trigger.disabled = select.disabled;
     const ariaLabel = select.getAttribute("aria-label");
     if (ariaLabel) trigger.setAttribute("aria-label", ariaLabel);
@@ -1308,10 +1322,17 @@ function enhanceBrandSelect(select) {
       const isSelected = i === select.selectedIndex;
       item.setAttribute("aria-selected", String(isSelected));
       item.disabled = opt.disabled;
-      const text = element("span", opt.textContent, "biibo-option-text");
+      const textWrap = element("span", undefined, "biibo-option-text");
+      if (opt.dataset?.dot) {
+        const dot = element("span", undefined, "biibo-option-dot");
+        dot.style.backgroundColor = opt.dataset.dot;
+        dot.setAttribute("aria-hidden", "true");
+        textWrap.append(dot);
+      }
+      textWrap.append(document.createTextNode(opt.textContent || ""));
       const check = element("span", isSelected ? "✓" : "", "biibo-option-check");
       check.setAttribute("aria-hidden", "true");
-      item.append(text, check);
+      item.append(textWrap, check);
       item.addEventListener("click", () => {
         const changed = select.selectedIndex !== i;
         valueDesc.set.call(select, opt.value);
@@ -1378,13 +1399,15 @@ function enhanceBrandSelect(select) {
   });
 
   const observer = new MutationObserver(sync);
-  observer.observe(select, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["disabled", "aria-label"] });
+  observer.observe(select, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["disabled", "aria-label", "data-dot"] });
   select.addEventListener("change", sync);
   select.addEventListener("focus", () => trigger.focus());
   select.form?.addEventListener("reset", () => queueMicrotask(sync));
-  customSelectSyncers.push(sync);
+  customSelectSyncers.push({ select, sync });
   sync();
 }
+
+window.enhanceBrandSelect = enhanceBrandSelect;
 
 document.addEventListener("pointerdown", e => {
   if (openSelectCloser && !e.target.closest(".biibo-select")) openSelectCloser();

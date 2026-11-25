@@ -17,6 +17,13 @@ import {
 import { LlmError, parseJsonFromLlm, runChatCompletion, stripThinkAndFence } from './llm.js';
 import { tfidfTextScores } from './tutor.js';
 import { outlineSyllabus, syllabusEventType, syllabusMilestones } from './syllabus.js';
+import {
+  detectScheduleFromSyllabusText,
+  ensureCourseSchedule,
+  isValidIsoDate,
+  normalizeWeekdays,
+  pickNextCourseColor,
+} from './courses.js';
 
 const DEFAULT_CONTEXT_BUDGET = 4500;
 const LONG_LLM_TIMEOUT_MS = 90_000;
@@ -339,7 +346,7 @@ export function classifySyllabusWeek(params: {
   return { week_type: types.every(type => type === 'holiday') ? 'holiday' : 'activity', requires_material: false };
 }
 
-function buildOverviewMarkdown(plan: {
+export function buildOverviewMarkdown(plan: {
   course_title: string;
   summary: string;
   weeks: CourseWeekPlan[];
@@ -510,6 +517,8 @@ interface RawLlmSyllabusExam {
 interface RawLlmSyllabusPlan {
   course_title?: unknown;
   summary?: unknown;
+  detected_weekdays?: unknown;
+  detected_start_date?: unknown;
   weeks?: RawLlmSyllabusWeek[];
   exams?: RawLlmSyllabusExam[];
 }
@@ -639,6 +648,8 @@ export async function generateSyllabusPlan(params: {
   // Stage 2: Automatic LLM planning (flexible for any course length/schedule; no fixed 16-week rule).
   let llmCourseTitle = '';
   let llmSummary = '';
+  let llmDetectedWeekdays: number[] = [];
+  let llmDetectedStartDate: string | null = null;
   let plannedUnits: PlannedUnitDraft[] = [];
   let exams: CourseExamMilestone[] = [];
   let llmPlanned = false;
@@ -658,6 +669,7 @@ export async function generateSyllabusPlan(params: {
                 '4. Set requires_material to true ONLY for "lecture" entries, and false for "holiday", "exam", and "activity".',
                 '5. Provide 1 concise learning objective for each "lecture" entry (empty array for non-lecture entries), plus key topics and any milestone/date noted in the source.',
                 '6. Extract major exams, project deadlines, and milestones into the exams array. Never fabricate dates.',
+                '7. If the syllabus states class meeting weekday(s) (e.g., "Tue. 13:20-16:20", "Mon/Wed"), return detected_weekdays as integers (0=Sun, 1=Mon, ..., 6=Sat). If Week 1 has an explicit calendar date (e.g., 2026/09/08), return detected_start_date as "YYYY-MM-DD", otherwise null. Never guess dates not in the source.',
                 'Return strict JSON only.',
               ].join('\n')
             : [
@@ -669,6 +681,7 @@ export async function generateSyllabusPlan(params: {
                 '4. 只有 "lecture" 的 requires_material 為 true；放假、純考試與純活動設為 false。',
                 '5. 為每個 "lecture" 單元撰寫 1 句精簡的繁體中文核心學習目標（objectives），非授課週留空陣列；並保留原文的 topics 與重要進度 milestone。',
                 '6. 將期中／期末考、小考、專題繳交與報告等重要時程整理到 exams 陣列，切勿捏造日期。',
+                '7. 若課綱開頭或排程有寫明上課星期（如「週二 13:20-16:20」、「Tue./Thu.」），請在 detected_weekdays 輸出整數陣列（0=週日, 1=週一 ... 6=週六）；若第 1 週有明確開課日期（如 2026/09/08），請在 detected_start_date 輸出 "YYYY-MM-DD"，否則輸出 null，切勿猜測未出現的日期。',
                 '請只輸出符合格式規範的 JSON。',
               ].join('\n'),
         },
@@ -682,6 +695,8 @@ export async function generateSyllabusPlan(params: {
         properties: {
           course_title: { type: 'string' },
           summary: { type: 'string' },
+          detected_weekdays: { type: 'array', items: { type: 'integer' } },
+          detected_start_date: { type: ['string', 'null'] },
           weeks: {
             type: 'array',
             items: {
@@ -724,6 +739,16 @@ export async function generateSyllabusPlan(params: {
     if (parsed && Array.isArray(parsed.weeks) && parsed.weeks.length > 0) {
       llmCourseTitle = typeof parsed.course_title === 'string' ? parsed.course_title.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
       llmSummary = typeof parsed.summary === 'string' ? parsed.summary.replace(/\s+/g, ' ').trim().slice(0, 320) : '';
+      if (Array.isArray(parsed.detected_weekdays) && parsed.detected_weekdays.length > 0) {
+        const cleanedDays = parsed.detected_weekdays
+          .map((d) => Number(d))
+          .filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+        if (cleanedDays.length) llmDetectedWeekdays = [...new Set(cleanedDays)].sort((a, b) => a - b);
+      }
+      if (typeof parsed.detected_start_date === 'string') {
+        const trimmedDate = parsed.detected_start_date.trim();
+        if (isValidIsoDate(trimmedDate)) llmDetectedStartDate = trimmedDate;
+      }
 
       const usedNumbers = new Set<number>();
       let nextNum = 1;
@@ -941,6 +966,27 @@ export async function generateSyllabusPlan(params: {
     manually_edited: keepManuallyEdited,
   });
 
+  const heuristicSchedule = detectScheduleFromSyllabusText(sourceText);
+  const detectedWeekdays = llmDetectedWeekdays.length
+    ? llmDetectedWeekdays
+    : heuristicSchedule.detected_weekdays;
+  const detectedStartDate = llmDetectedStartDate || heuristicSchedule.detected_start_date;
+
+  const existingSchedule = previous ? ensureCourseSchedule(previous, 0) : null;
+  const finalSchedule = existingSchedule?.manual_override
+    ? existingSchedule
+    : {
+        color: existingSchedule?.color || pickNextCourseColor(previous?.id),
+        weekdays: normalizeWeekdays(detectedWeekdays.length ? detectedWeekdays : existingSchedule?.weekdays || [1]),
+        start_date_override: detectedStartDate ?? existingSchedule?.start_date_override ?? null,
+        location: existingSchedule?.location || '',
+        manual_override: false,
+      };
+
+  if (!store.calendarSettings.semester_start_date && detectedStartDate) {
+    store.calendarSettings.semester_start_date = detectedStartDate;
+  }
+
   const plan: CoursePlanRecord = {
     id: previous?.id || uuidHex(),
     root_folder_id: rootFolder.id,
@@ -952,6 +998,7 @@ export async function generateSyllabusPlan(params: {
     overview_document_id: docId,
     weeks,
     exams,
+    schedule: finalSchedule,
     updated_at: new Date().toISOString(),
   };
   if (!existingRoot) store.folders.set(rootFolder.id, rootFolder);
@@ -976,7 +1023,7 @@ export async function generateSyllabusPlan(params: {
   };
 }
 
-function otherCourseFolders(courseId?: string): Set<string | null> {
+export function otherCourseFolders(courseId?: string): Set<string | null> {
   const ids = new Set<string | null>();
   for (const course of store.coursePlans.values()) {
     if (course.id === courseId) continue;

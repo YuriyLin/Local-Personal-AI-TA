@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Quicksand:wght@400;500;600;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap">
   <link rel="stylesheet" href="/math/katex.min.css"><link rel="stylesheet" href="/pdfjs/web/pdf_viewer.css"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/view-switch.css">
-  <script defer src="/math/katex.min.js"></script><script defer src="/static/i18n.js"></script><script defer src="/static/app.js"></script><script defer src="/static/reader.js"></script><script defer src="/static/library.js"></script><script defer src="/static/study.js"></script>
+  <script defer src="/math/katex.min.js"></script><script defer src="/static/i18n.js"></script><script defer src="/static/app.js"></script><script defer src="/static/reader.js"></script><script defer src="/static/library.js"></script><script defer src="/static/study.js"></script><script defer src="/static/courses.js"></script>
 </head>
 <body>
   <a class="skip" href="#reader">跳到教材</a>
@@ -30,6 +30,7 @@
       <a href="#tutor">問助教</a>
     </nav>
     <div class="masthead-actions">
+      <a href="/courses" id="courses-link" class="ghost-btn nav-link-btn">課程管理</a>
       <a href="/library" id="library-link" class="ghost-btn nav-link-btn">教材庫</a>
       <button id="language-toggle" type="button" class="ghost-btn" aria-label="切換介面語言">EN</button>
       <button id="records-open" type="button" class="ghost-btn">對話管理</button>
@@ -57,6 +58,67 @@
     </div>
     <div id="catalog-jobs" aria-live="polite"></div>
     <div id="catalog-documents"></div>
+  </main>
+  <main id="courses-page" class="courses-page" tabindex="-1" hidden>
+    <header class="courses-header">
+      <div class="courses-heading">
+        <p class="brand-tagline">學期排程與跨課程月行事曆</p>
+        <h2>課程管理</h2>
+      </div>
+      <div class="courses-header-controls">
+        <div class="semester-anchor-control">
+          <label for="semester-start-input">全學期開學基準日</label>
+          <div class="semester-anchor-row">
+            <input id="semester-start-input" type="date" aria-label="全學期開學基準日">
+            <span id="semester-start-status" class="semester-anchor-status" role="status"></span>
+          </div>
+        </div>
+        <div id="courses-header-actions" class="courses-header-actions" hidden>
+          <button type="button" id="courses-import-syllabus" class="primary">＋ 匯入課綱</button>
+          <button type="button" id="courses-create-btn" class="ghost-btn">＋ 手動新增課程</button>
+        </div>
+      </div>
+    </header>
+    <section class="courses-overview-section" aria-label="課程總覽">
+      <div id="courses-grid" class="courses-grid"></div>
+      <div id="courses-empty" class="courses-empty" hidden>
+        <h3>還沒有建立任何課程</h3>
+        <p>匯入課綱 PDF／截圖讓 BIIBO 自動辨識上課星期與每週單元，或直接手動建立一門新課程。</p>
+        <div class="courses-empty-actions">
+          <button type="button" id="courses-empty-import" class="primary">＋ 匯入課綱</button>
+          <button type="button" id="courses-empty-create" class="ghost-btn">＋ 手動新增課程</button>
+        </div>
+      </div>
+    </section>
+    <section class="courses-calendar-section" aria-label="跨課程月行事曆">
+      <div class="courses-calendar-layout">
+        <div class="calendar-card">
+          <div class="calendar-toolbar">
+            <div class="calendar-month-nav">
+              <button type="button" id="cal-prev-month" class="cal-nav-btn" aria-label="上個月">‹</button>
+              <h3 id="cal-month-title" class="cal-month-title"></h3>
+              <button type="button" id="cal-next-month" class="cal-nav-btn" aria-label="下個月">›</button>
+              <button type="button" id="cal-today-btn" class="ghost-btn cal-today-btn">今天</button>
+            </div>
+            <div id="cal-type-filters" class="cal-type-filters" role="group" aria-label="事件類型篩選"></div>
+          </div>
+          <div id="cal-course-filters" class="cal-course-filters" role="group" aria-label="課程色標篩選"></div>
+          <div id="cal-anchor-notice" class="cal-anchor-notice" hidden></div>
+          <div id="cal-weekdays" class="calendar-weekdays" aria-hidden="true"></div>
+          <div id="cal-grid" class="calendar-grid" role="grid" aria-labelledby="cal-month-title"></div>
+        </div>
+        <aside id="cal-day-panel" class="cal-day-panel" aria-label="當日詳情">
+          <div class="cal-day-panel-head">
+            <div class="cal-day-panel-heading">
+              <p id="cal-day-weekday" class="cal-day-weekday"></p>
+              <h3 id="cal-day-title" class="cal-day-title"></h3>
+            </div>
+            <button type="button" id="cal-add-event-btn" class="primary cal-add-event-btn">＋ 新增事件</button>
+          </div>
+          <div id="cal-day-items" class="cal-day-items"></div>
+        </aside>
+      </div>
+    </section>
   </main>
   <div class="workspace" data-panel="library">
     <aside id="library" aria-labelledby="library-title">
@@ -452,14 +514,14 @@
         </div>
         <button type="button" id="syllabus-preview-clear" class="syllabus-preview-clear">移除圖片</button>
       </div>
-      <div id="syllabus-stages" class="syllabus-stages">
+      <div id="syllabus-stages" class="syllabus-stages" hidden>
         <ol class="syllabus-stage-list">
           <li data-stage="1">讀取課綱內容（支援 PDF、截圖與純文字）</li>
           <li data-stage="2">依課綱整理單元、授課分類與考試時程</li>
           <li data-stage="3">建立分類資料夾與置頂課程總覽筆記</li>
         </ol>
         <div class="syllabus-stage-art" aria-hidden="true">
-          <video id="syllabus-stage-video" class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-syllabus-scan.jpg">
+          <video id="syllabus-stage-video" class="mascot-video" loop muted playsinline poster="/static/assets/biibo-syllabus-scan.jpg">
             <source src="/static/assets/biibo-syllabus-scan.mp4" type="video/mp4">
           </video>
         </div>
@@ -695,5 +757,162 @@
       </div>
     </div>
   </dialog>
+  <dialog id="course-editor-dialog" class="course-editor-dialog" aria-labelledby="course-editor-title">
+    <form id="course-editor-form" class="course-editor-shell">
+      <header class="ce-head">
+        <div>
+          <h2 id="course-editor-title">編輯課綱與排程</h2>
+          <p id="course-editor-sub" class="ce-sub"></p>
+        </div>
+        <button type="button" class="records-close" data-close aria-label="關閉"><span aria-hidden="true">×</span></button>
+      </header>
+      <div class="ce-tabs" role="tablist" aria-label="課程編輯分頁">
+        <button type="button" class="ce-tab" data-ce-tab="basic" role="tab" aria-selected="true">基本與排程</button>
+        <button type="button" class="ce-tab" data-ce-tab="weeks" role="tab" aria-selected="false" tabindex="-1">每週單元</button>
+        <button type="button" class="ce-tab" data-ce-tab="exams" role="tab" aria-selected="false" tabindex="-1">考試與時程</button>
+      </div>
+      <div class="ce-body">
+        <section id="ce-panel-basic" class="ce-panel" role="tabpanel">
+          <div class="ce-field">
+            <label for="ce-title">課程名稱</label>
+            <input id="ce-title" type="text" required maxlength="80" placeholder="例如：資料科學導論">
+          </div>
+          <div class="ce-field">
+            <label for="ce-summary">課程簡介（選填）</label>
+            <textarea id="ce-summary" rows="2" maxlength="320" placeholder="簡述課程主題與評量重點…"></textarea>
+          </div>
+          <div class="ce-field">
+            <span class="ce-field-label">課程色標</span>
+            <div id="ce-color-grid" class="ce-color-grid" role="radiogroup" aria-label="課程色標"></div>
+          </div>
+          <div class="ce-field">
+            <span class="ce-field-label">每週上課星期</span>
+            <div id="ce-weekdays" class="ce-weekdays" role="group" aria-label="每週上課星期"></div>
+          </div>
+          <div class="ce-schedule-row">
+            <div class="ce-field">
+              <div class="ce-field-head">
+                <label class="checkbox-row ce-override-toggle">
+                  <input id="ce-use-custom-start" type="checkbox">
+                  <span>自訂本課開學日</span>
+                </label>
+              </div>
+              <input id="ce-start-date" type="date" aria-label="自訂開學日">
+              <p id="ce-start-hint" class="ce-hint"></p>
+            </div>
+            <div class="ce-field">
+              <div class="ce-field-head">
+                <label for="ce-location">教室／時間備註（選填）</label>
+              </div>
+              <input id="ce-location" type="text" maxlength="80" placeholder="例如：資電館 204 · 13:20–16:20">
+            </div>
+          </div>
+        </section>
+        <section id="ce-panel-weeks" class="ce-panel" role="tabpanel" hidden>
+          <p class="ce-protection-note">修改週次標題會同步更新側邊欄資料夾名稱；刪除含講義或筆記的週次時，檔案將自動退回課程根目錄保存，不會遺失。</p>
+          <div id="ce-weeks-list" class="ce-weeks-list"></div>
+          <div class="ce-weeks-actions">
+            <button type="button" id="ce-add-week" class="ghost-btn ce-add-row-btn">＋ 新增週次</button>
+            <button type="button" id="ce-batch-16" class="ghost-btn ce-add-row-btn">＋ 批次產生 16 週</button>
+            <button type="button" id="ce-batch-18" class="ghost-btn ce-add-row-btn">＋ 批次產生 18 週</button>
+          </div>
+        </section>
+        <section id="ce-panel-exams" class="ce-panel" role="tabpanel" hidden>
+          <p class="ce-protection-note">若選擇明確日期，月行事曆將優先以該日期顯示；否則依所選關聯週次自動換算。</p>
+          <div id="ce-exams-list" class="ce-exams-list"></div>
+          <button type="button" id="ce-add-exam" class="ghost-btn ce-add-row-btn">＋ 新增里程碑</button>
+        </section>
+      </div>
+      <footer class="ce-footer">
+        <p id="ce-status" class="ce-status" role="status"></p>
+        <div class="ce-footer-actions">
+          <button type="button" id="ce-delete-course" class="danger-btn" hidden>刪除課程規劃</button>
+          <div class="ce-footer-right">
+            <button type="button" data-close>取消</button>
+            <button type="submit" id="ce-save-btn" class="primary">儲存變更</button>
+          </div>
+        </div>
+      </footer>
+    </form>
+  </dialog>
+  <dialog id="calendar-event-dialog" class="calendar-event-dialog" aria-labelledby="cal-evt-dialog-title">
+    <form id="calendar-event-form" class="cal-evt-form">
+      <div class="dialog-head"><h2 id="cal-evt-dialog-title">新增自訂事件</h2></div>
+      <label for="cal-evt-title">事件標題</label>
+      <input id="cal-evt-title" type="text" required maxlength="120" placeholder="例如：繳交作業三、期中考複習">
+      <div class="cal-evt-row">
+        <div class="ce-field">
+          <label for="cal-evt-date">日期</label>
+          <input id="cal-evt-date" type="date" required>
+        </div>
+        <div class="ce-field">
+          <label for="cal-evt-time">時間（選填）</label>
+          <div class="cal-time-wrap">
+            <input id="cal-evt-time" type="time" value="">
+            <button type="button" id="cal-evt-time-clear" class="cal-time-clear" aria-label="清除時間（設為全天）" title="清除時間（設為全天）" hidden>×</button>
+          </div>
+          <span class="cal-time-hint">留空代表全天事件</span>
+        </div>
+      </div>
+      <div class="cal-evt-row">
+        <div class="ce-field">
+          <label for="cal-evt-category">事件類別</label>
+          <select id="cal-evt-category">
+            <option value="todo" data-dot="#2d8f74">待辦事項</option>
+            <option value="deadline" data-dot="#c88a2e">作業截止</option>
+            <option value="exam" data-dot="#c8433e">考試</option>
+            <option value="reminder" data-dot="#7b63c7">提醒</option>
+          </select>
+        </div>
+        <div class="ce-field">
+          <label for="cal-evt-course">關聯課程（選填）</label>
+          <select id="cal-evt-course"></select>
+        </div>
+      </div>
+      <label for="cal-evt-notes">備註（選填）</label>
+      <textarea id="cal-evt-notes" rows="3" maxlength="400" placeholder="補充範圍、繳交連結或提醒事項…"></textarea>
+      <p id="cal-evt-status" role="status"></p>
+      <div class="cal-evt-actions">
+        <button type="button" id="cal-evt-delete" class="danger-btn" hidden>刪除事件</button>
+        <div class="ce-footer-right">
+          <button type="button" data-close>取消</button>
+          <button type="submit" id="cal-evt-save" class="primary">儲存事件</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="syllabus-complete-dialog" class="syllabus-complete-dialog" aria-labelledby="syllabus-complete-title">
+    <div class="syllabus-complete-shell">
+      <button type="button" class="records-close syllabus-complete-x" data-close aria-label="關閉"><span aria-hidden="true">×</span></button>
+      <div class="syllabus-complete-art" aria-hidden="true">
+        <video id="syllabus-complete-video" class="mascot-video" loop muted playsinline poster="/static/assets/biibo-tutor-welcome.jpg">
+          <source src="/static/assets/biibo-tutor-welcome.mp4?v=3" type="video/mp4">
+        </video>
+      </div>
+      <div class="syllabus-complete-kicker">
+        <span class="syllabus-complete-check" aria-hidden="true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span id="syllabus-complete-kicker-text">課綱規劃完成</span>
+      </div>
+      <h2 id="syllabus-complete-title" class="syllabus-complete-title"></h2>
+      <p id="syllabus-complete-desc" class="syllabus-complete-desc"></p>
+      <div id="syllabus-complete-stats" class="syllabus-complete-stats" aria-label="規劃結果摘要"></div>
+      <div class="syllabus-complete-actions">
+        <button type="button" id="syllabus-complete-secondary" class="ghost-btn"></button>
+        <button type="button" id="syllabus-complete-primary" class="primary"></button>
+      </div>
+    </div>
+  </dialog>
+  <div id="biibo-toast" class="biibo-toast" popover="manual" role="status" aria-live="polite">
+    <span class="biibo-toast-icon" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    </span>
+    <div class="biibo-toast-body">
+      <strong id="biibo-toast-title" class="biibo-toast-title"></strong>
+      <p id="biibo-toast-detail" class="biibo-toast-detail"></p>
+    </div>
+    <button type="button" id="biibo-toast-close" class="biibo-toast-close" aria-label="關閉通知">×</button>
+  </div>
 </body>
 </html>

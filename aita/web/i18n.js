@@ -392,6 +392,66 @@ AI 模型引擎|AI model engine
 已偵測 CLI|CLI detected
 已設定金鑰|Key configured
 未就緒|Not ready
+課程管理|Courses
+全學期開學基準日|Semester start date
+＋ 匯入課綱|+ Import syllabus
+＋ 手動新增課程|+ New course
+課程總覽|Course overview
+跨課程月行事曆|Multi-course calendar
+還沒有建立任何課程|No courses yet
+匯入課綱 PDF／截圖讓 BIIBO 自動辨識上課星期與每週單元，或直接手動建立一門新課程。|Import a syllabus PDF or screenshot for BIIBO to detect class weekdays and weekly units, or create a course manually.
+上個月|Previous month
+下個月|Next month
+今天|Today
+事件類型篩選|Filter by event type
+課程色標篩選|Filter by course
+當日詳情|Selected day details
+＋ 新增事件|+ Add event
+編輯課綱與排程|Edit course & schedule
+課程編輯分頁|Course editor tabs
+基本與排程|Basics & Schedule
+每週單元|Weekly Units
+考試與時程|Exams & Milestones
+課程簡介（選填）|Course summary (optional)
+簡述課程主題與評量重點…|Brief overview of course topics and grading…
+課程色標|Course color
+每週上課星期|Class weekdays
+自訂本課開學日|Use custom start date
+自訂開學日|Custom start date
+教室／時間備註（選填）|Classroom / time note (optional)
+例如：資電館 204 · 13:20–16:20|e.g. Room 204 · 13:20–16:20
+例如：資料科學導論|e.g. Introduction to Data Science
+修改週次標題會同步更新側邊欄資料夾名稱；刪除含講義或筆記的週次時，檔案將自動退回課程根目錄保存，不會遺失。|Renaming a week updates its sidebar folder automatically; deleting a week moves any PDFs or notes safely back to the course root folder.
+若填寫明確日期（YYYY-MM-DD），月行事曆將優先以該日期顯示；否則依對應週次自動換算。|Explicit dates (YYYY-MM-DD) appear directly on the calendar; otherwise dates are mapped from the week number.
+＋ 新增週次|+ Add week
+＋ 新增里程碑|+ Add milestone
+刪除課程規劃|Delete course plan
+取消|Cancel
+儲存變更|Save changes
+新增自訂事件|New custom event
+編輯自訂事件|Edit custom event
+事件標題|Event title
+例如：繳交作業三、期中考複習|e.g. Submit HW 3, Midterm review
+日期|Date
+時間（選填）|Time (optional)
+事件類別|Category
+待辦事項|To-do
+作業截止|Deadline
+提醒|Reminder
+關聯課程（選填）|Course (optional)
+備註（選填）|Notes (optional)
+補充範圍、繳交連結或提醒事項…|Add scope, submission notes, or reminders…
+刪除事件|Delete event
+儲存事件|Save event
+學期排程與跨課程月行事曆|Semester Schedule & Multi-Course Calendar
+清除時間（設為全天）|Clear time (all-day)
+留空代表全天事件|Leave blank for all-day
+＋ 批次產生 16 週|+ Batch 16 weeks
+＋ 批次產生 18 週|+ Batch 18 weeks
+若選擇明確日期，月行事曆將優先以該日期顯示；否則依所選關聯週次自動換算。|When an explicit date is selected, it takes priority on the calendar; otherwise the linked week is mapped automatically.
+課綱規劃完成|Syllabus Planning Complete
+規劃結果摘要|Planning summary
+關閉通知|Dismiss notification
 `.trim().split("\n").map(line => line.split("|")));
 
 let interfaceLanguage;

@@ -7,7 +7,11 @@
   let coursePlan = null;
   let courses = [];
   let coursePlanningReady = false;
-  let selectedCourse = readLocal("biibo-active-course", "");
+  const startupParams = new URLSearchParams(location.search);
+  const startupCourseParam = startupParams.get("course") || "";
+  let pendingPreviewWeek = Number(startupParams.get("previewWeek") || 0) || 0;
+  let pendingUploadWeek = Number(startupParams.get("uploadWeek") || 0) || 0;
+  let selectedCourse = startupCourseParam || readLocal("biibo-active-course", "");
   let courseRequest = 0;
   let syllabusTarget = null;
   let syllabusOpenState = readLocal("biibo-syllabus-open", true);
@@ -674,9 +678,36 @@
     selectedCourse = coursePlan?.id || "";
     try { saveLocal("biibo-active-course", selectedCourse); } catch { /* Keep the current selection in memory. */ }
     const picker = $("active-course");
-    picker.replaceChildren(...courses.map(course => new Option(course.course_title, course.id)));
-    picker.value = selectedCourse;
+    if (picker) {
+      picker.replaceChildren(...courses.map(course => new Option(course.course_title, course.id)));
+      picker.value = selectedCourse;
+    }
     renderSyllabusPanel();
+
+    if (location.pathname !== "/courses" && coursePlan && (pendingPreviewWeek || pendingUploadWeek)) {
+      const targetPreview = pendingPreviewWeek;
+      const targetUpload = pendingUploadWeek;
+      pendingPreviewWeek = 0;
+      pendingUploadWeek = 0;
+      try {
+        const cleanUrl = new URL(location.href);
+        cleanUrl.searchParams.delete("course");
+        cleanUrl.searchParams.delete("previewWeek");
+        cleanUrl.searchParams.delete("uploadWeek");
+        history.replaceState(history.state, "", cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+      } catch { /* ignore */ }
+      const targetWeek = coursePlan.weeks.find(w => w.week_number === (targetPreview || targetUpload));
+      if (targetWeek) {
+        activePreviewWeek = targetWeek;
+        if (typeof window.setRightPaneTab === "function") window.setRightPaneTab("tutor", true);
+        showWeekPreviewBanner(targetWeek);
+        if (targetPreview) {
+          runWeekPreview().catch(report);
+        } else if (targetUpload) {
+          openUploadForActiveWeek().catch(report);
+        }
+      }
+    }
   }
 
   window.refreshSyllabusPlan = async () => {
@@ -685,6 +716,22 @@
     } catch {
       // Ignore silent refresh error on startup.
     }
+  };
+
+  window.openSyllabusDialogForCourse = course => {
+    if (course) openSyllabusDialog(course);
+  };
+
+  window.openNewSyllabusImport = () => {
+    syllabusTarget = null;
+    cancelSyllabusPending();
+    $("syllabus-form")?.reset();
+    renderSyllabusDialogMode();
+    clearSyllabusImagePreview(false);
+    if ($("syllabus-status")) $("syllabus-status").textContent = "";
+    resetSyllabusStages();
+    updateSyllabusFileLabel();
+    showIntakeDialog("syllabus");
   };
 
   function updateSyllabusFileLabel() {
@@ -728,6 +775,11 @@
   function resetSyllabusStages() {
     const box = $("syllabus-stages");
     if (!box) return;
+    box.hidden = true;
+    const video = $("syllabus-stage-video");
+    if (video && !video.paused) {
+      try { video.pause(); } catch { /* ignore */ }
+    }
     for (const li of box.querySelectorAll("li")) {
       li.classList.remove("is-active", "is-done");
     }
@@ -749,6 +801,7 @@
   function setSyllabusStage(stageNum) {
     const box = $("syllabus-stages");
     if (!box) return;
+    box.hidden = false;
     const video = $("syllabus-stage-video");
     if (video && video.paused) {
       video.play().catch(() => {});
@@ -759,6 +812,168 @@
       li.classList.toggle("is-active", n === stageNum);
     }
   }
+
+  let toastHideTimer = 0;
+
+  function hideBiiboToast() {
+    if (toastHideTimer) {
+      clearTimeout(toastHideTimer);
+      toastHideTimer = 0;
+    }
+    const toast = $("biibo-toast");
+    if (!toast) return;
+    toast.classList.remove("is-open");
+    try {
+      if (typeof toast.hidePopover === "function" && toast.matches(":popover-open")) {
+        toast.hidePopover();
+      }
+    } catch { /* ignore */ }
+  }
+
+  function showBiiboToast(title, detail = "", durationMs = 5600) {
+    const toast = $("biibo-toast");
+    if (!toast) return;
+    if (toastHideTimer) {
+      clearTimeout(toastHideTimer);
+      toastHideTimer = 0;
+    }
+    const titleEl = $("biibo-toast-title");
+    const detailEl = $("biibo-toast-detail");
+    if (titleEl) titleEl.textContent = title || "";
+    if (detailEl) {
+      detailEl.textContent = detail || "";
+      detailEl.hidden = !detail;
+    }
+    try {
+      if (typeof toast.hidePopover === "function" && toast.matches(":popover-open")) {
+        toast.hidePopover();
+      }
+      if (typeof toast.showPopover === "function") {
+        toast.showPopover();
+      }
+    } catch { /* fallback to fixed overlay */ }
+    toast.classList.add("is-open");
+    if (durationMs > 0) {
+      toastHideTimer = window.setTimeout(hideBiiboToast, durationMs);
+    }
+  }
+
+  window.showBiiboToast = showBiiboToast;
+  $("biibo-toast-close")?.addEventListener("click", hideBiiboToast);
+
+  let syllabusCompletePrimaryAction = null;
+  let syllabusCompleteSecondaryAction = null;
+
+  function showSyllabusCompleteModal(info) {
+    const dialog = $("syllabus-complete-dialog");
+    if (!dialog) return;
+
+    const kickerEl = $("syllabus-complete-kicker-text");
+    const titleEl = $("syllabus-complete-title");
+    const descEl = $("syllabus-complete-desc");
+    const statsEl = $("syllabus-complete-stats");
+    const primaryBtn = $("syllabus-complete-primary");
+    const secondaryBtn = $("syllabus-complete-secondary");
+    const video = $("syllabus-complete-video");
+
+    if (kickerEl) {
+      kickerEl.textContent = info.isUpdate
+        ? (english() ? "Syllabus Updated" : "課綱更新完成")
+        : (english() ? "Syllabus Planning Complete" : "課綱規劃完成");
+    }
+    if (titleEl) {
+      titleEl.textContent = info.courseTitle || (english() ? "Your Course" : "課程規劃");
+    }
+    if (descEl) {
+      descEl.textContent = info.description || "";
+    }
+
+    if (statsEl) {
+      const statItems = [
+        { value: info.unitCount, label: english() ? "Weekly units" : "單元週次" },
+        { value: info.folderTotal, label: english() ? "Lecture folders" : "授課分類" },
+        { value: info.examCount, label: english() ? "Exams & milestones" : "考試與時程" }
+      ];
+      statsEl.replaceChildren(...statItems.map(item => {
+        const card = element("div", undefined, "syllabus-complete-stat");
+        card.append(
+          element("span", String(item.value), "syllabus-complete-stat-val"),
+          element("span", item.label, "syllabus-complete-stat-label")
+        );
+        return card;
+      }));
+    }
+
+    const onCoursesPage = location.pathname === "/courses";
+    const onWorkspace = location.pathname === "/" || location.pathname === "";
+
+    if (onCoursesPage) {
+      primaryBtn.textContent = english() ? "View courses & calendar" : "查看課程與月曆";
+      syllabusCompletePrimaryAction = () => dialog.close();
+      if (info.overviewDocumentId) {
+        secondaryBtn.hidden = false;
+        secondaryBtn.textContent = english() ? "Open overview note" : "開啟課程總覽筆記";
+        syllabusCompleteSecondaryAction = () => {
+          dialog.close();
+          location.href = `/?document=${encodeURIComponent(info.overviewDocumentId)}`;
+        };
+      } else {
+        secondaryBtn.hidden = true;
+        syllabusCompleteSecondaryAction = null;
+      }
+    } else if (onWorkspace && info.overviewDocumentId) {
+      primaryBtn.textContent = english() ? "Open overview note" : "查看課程總覽筆記";
+      syllabusCompletePrimaryAction = () => {
+        dialog.close();
+        openDocument(info.overviewDocumentId).catch(report);
+      };
+      secondaryBtn.hidden = false;
+      secondaryBtn.textContent = english() ? "Go to Courses" : "前往課程管理";
+      syllabusCompleteSecondaryAction = () => {
+        dialog.close();
+        location.href = "/courses";
+      };
+    } else if (info.overviewDocumentId) {
+      primaryBtn.textContent = english() ? "Open overview note" : "查看課程總覽筆記";
+      syllabusCompletePrimaryAction = () => {
+        dialog.close();
+        location.href = `/?document=${encodeURIComponent(info.overviewDocumentId)}`;
+      };
+      secondaryBtn.hidden = false;
+      secondaryBtn.textContent = english() ? "Go to Courses" : "前往課程管理";
+      syllabusCompleteSecondaryAction = () => {
+        dialog.close();
+        location.href = "/courses";
+      };
+    } else {
+      primaryBtn.textContent = english() ? "Done" : "完成";
+      syllabusCompletePrimaryAction = () => dialog.close();
+      secondaryBtn.hidden = true;
+      syllabusCompleteSecondaryAction = null;
+    }
+
+    if (!dialog.open) dialog.showModal();
+    if (video) {
+      try {
+        video.currentTime = 0;
+        video.play().catch(() => {});
+      } catch { /* ignore */ }
+    }
+    primaryBtn?.focus();
+  }
+
+  $("syllabus-complete-primary")?.addEventListener("click", () => {
+    if (typeof syllabusCompletePrimaryAction === "function") syllabusCompletePrimaryAction();
+  });
+  $("syllabus-complete-secondary")?.addEventListener("click", () => {
+    if (typeof syllabusCompleteSecondaryAction === "function") syllabusCompleteSecondaryAction();
+  });
+  $("syllabus-complete-dialog")?.addEventListener("close", () => {
+    const video = $("syllabus-complete-video");
+    if (video && !video.paused) {
+      try { video.pause(); } catch { /* ignore */ }
+    }
+  });
 
   $("import-dialog")?.addEventListener("close", () => {
     if (syllabusTarget) $("syllabus-course-title").value = "";
@@ -929,17 +1144,20 @@
 
       await refreshDocuments();
       await refreshCoursePlan();
+      if (typeof window.refreshCoursesView === "function") {
+        await window.refreshCoursesView();
+      }
       if (request !== syllabusRequest) return;
 
       setSyllabusStage(4);
-      if (syllabusTarget === target) {
-        $("syllabus-text").value = "";
-        clearSyllabusImagePreview(true);
-        updateSyllabusFileLabel();
-      }
-
+      const isUpdate = Boolean(target);
+      const plannedCourseTitle = result.plan?.course_title || courseTitle || (english() ? "Course" : "課程");
       const folderTotal = (result.created_folders?.length || 0) + (result.reused_folders?.length || 0);
       const unitCount = result.plan?.weeks?.length || 0;
+      const examWeeksCount = (result.plan?.weeks || []).filter(w => w.week_type === "exam").length;
+      const examCount = Math.max(result.plan?.exams?.length || 0, examWeeksCount);
+      const overviewDocumentId = result.plan?.overview_document_id || "";
+
       let summaryMsg;
       if (result.overview_update_mode === "appended") {
         summaryMsg = english()
@@ -950,11 +1168,42 @@
           ? `Planned ${unitCount} units, prepared ${folderTotal} lecture folders, and pinned your course overview note.`
           : `已規劃 ${unitCount} 個單元、整理 ${folderTotal} 堂授課分類，並置頂課程總覽筆記。`;
       }
-
-      status.textContent = summaryMsg + (result.enriched ? "" : (english()
+      const fullSummary = summaryMsg + (result.enriched ? "" : (english()
         ? " (Saved with automatic structure extraction while the AI model was offline.)"
         : "（AI 模型暫時離線，已以自動結構解析完成建立。）"));
-      clearSyllabusImagePreview(true);
+
+      if (syllabusTarget === target) {
+        $("syllabus-text").value = "";
+        $("syllabus-course-title").value = "";
+        clearSyllabusImagePreview(true);
+        updateSyllabusFileLabel();
+      }
+      status.textContent = "";
+
+      const importDialog = $("import-dialog");
+      if (importDialog?.open) {
+        importDialog.close();
+      } else {
+        resetSyllabusStages();
+      }
+
+      showSyllabusCompleteModal({
+        isUpdate,
+        courseTitle: plannedCourseTitle,
+        description: fullSummary,
+        unitCount,
+        folderTotal,
+        examCount,
+        overviewDocumentId
+      });
+
+      const toastTitle = isUpdate
+        ? (english() ? `Updated syllabus · ${plannedCourseTitle}` : `課綱更新完成 · ${plannedCourseTitle}`)
+        : (english() ? `Syllabus planned · ${plannedCourseTitle}` : `課綱規劃完成 · ${plannedCourseTitle}`);
+      const toastDetail = english()
+        ? `${unitCount} units · ${folderTotal} folders ready`
+        : `已建立 ${unitCount} 個單元與 ${folderTotal} 堂授課分類`;
+      showBiiboToast(toastTitle, toastDetail);
     } catch (error) {
       if (request !== syllabusRequest) return;
       clearSyllabusStageTimer();

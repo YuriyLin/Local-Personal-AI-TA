@@ -22,6 +22,17 @@ import {
   StudyHttpError,
 } from './src/study.js';
 import {
+  COURSE_PALETTE,
+  createCalendarEvent,
+  createManualCourse,
+  deleteCalendarEvent,
+  deleteCoursePlan,
+  ensureCourseSchedule,
+  updateCalendarEvent,
+  updateCalendarSettings,
+  updateFullCourse,
+} from './src/courses.js';
+import {
   discoverCliModels,
   discoverEngines,
   getEngineDescriptor,
@@ -250,7 +261,7 @@ function enqueueJob(jobId: string, bundle: Buffer | null): void {
 }
 
 // HTML entry routes
-app.get(['/', '/library'], (_req, res) => {
+app.get(['/', '/library', '/courses'], (_req, res) => {
   res.sendFile(path.join(WEB_DIR, 'index.html'));
 });
 
@@ -1234,7 +1245,7 @@ app.post('/api/mascot/animate', async (req, res, next) => {
 // Study Features (100% Local Ollama): Syllabus Plan, Note Draft, Self-Test Quiz
 // ============================================================
 
-function enrichCoursePlan(plan: CoursePlanRecord | undefined) {
+function enrichCoursePlan(plan: CoursePlanRecord | undefined, fallbackIndex = 0) {
   if (!plan) return null;
   const activeDocs = [...store.documents.values()].filter((d) => d.active && d.kind !== 'personal');
   const docsByFolder = new Map<string, Array<{ id: string; name: string; kind: string }>>();
@@ -1245,8 +1256,10 @@ function enrichCoursePlan(plan: CoursePlanRecord | undefined) {
     arr.push({ id: doc.id, name: doc.name, kind: doc.kind });
     docsByFolder.set(folderId, arr);
   }
+  const schedule = ensureCourseSchedule(plan, fallbackIndex);
   return {
     ...plan,
+    schedule,
     weeks: plan.weeks.map((w) => {
       const weekType = w.week_type || 'lecture';
       const requiresMaterial = typeof w.requires_material === 'boolean' ? w.requires_material : weekType === 'lecture';
@@ -1411,6 +1424,103 @@ app.post('/api/syllabus/preview', async (req, res, next) => {
     }
     const result = await generateWeekPreview({ plan: requiredCoursePlan(req.body?.course_id), weekNumber, conversationId });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
+// Course Management & Multi-Course Monthly Calendar
+// ============================================================
+
+app.get('/api/courses', (_req, res) => {
+  const courses = [...store.coursePlans.values()].map((plan, idx) => enrichCoursePlan(plan, idx));
+  res.json({
+    courses,
+    calendar_settings: store.calendarSettings,
+    events: [...store.calendarEvents.values()],
+    palette: COURSE_PALETTE,
+  });
+});
+
+app.post('/api/courses', async (req, res, next) => {
+  try {
+    const outcome = await createManualCourse((req.body || {}) as Record<string, unknown>);
+    res.status(201).json({ ...outcome, plan: enrichCoursePlan(outcome.plan, store.coursePlans.size - 1) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put('/api/courses/:id', async (req, res, next) => {
+  const courseId = String(req.params.id || '').trim();
+  if (updatingCourses.has(courseId)) {
+    next(httpError(409, '正在更新這門課程，請稍候再試。'));
+    return;
+  }
+  updatingCourses.add(courseId);
+  try {
+    const outcome = await updateFullCourse(courseId, (req.body || {}) as Record<string, unknown>);
+    res.json({
+      ...outcome,
+      plan: enrichCoursePlan(outcome.plan),
+    });
+  } catch (err) {
+    next(err);
+  } finally {
+    updatingCourses.delete(courseId);
+  }
+});
+
+app.delete('/api/courses/:id', (req, res, next) => {
+  const courseId = String(req.params.id || '').trim();
+  if (updatingCourses.has(courseId)) {
+    next(httpError(409, '正在更新這門課程，請稍候再試。'));
+    return;
+  }
+  try {
+    const outcome = deleteCoursePlan(courseId);
+    res.json(outcome);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/api/calendar/settings', (req, res, next) => {
+  try {
+    const settings = updateCalendarSettings((req.body || {}) as Record<string, unknown>);
+    res.json({ calendar_settings: settings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/calendar/events', (_req, res) => {
+  res.json({ events: [...store.calendarEvents.values()] });
+});
+
+app.post('/api/calendar/events', (req, res, next) => {
+  try {
+    const event = createCalendarEvent((req.body || {}) as Record<string, unknown>);
+    res.status(201).json({ event });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/api/calendar/events/:id', (req, res, next) => {
+  try {
+    const event = updateCalendarEvent(String(req.params.id || '').trim(), (req.body || {}) as Record<string, unknown>);
+    res.json({ event });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/calendar/events/:id', (req, res, next) => {
+  try {
+    const outcome = deleteCalendarEvent(String(req.params.id || '').trim());
+    res.json(outcome);
   } catch (err) {
     next(err);
   }

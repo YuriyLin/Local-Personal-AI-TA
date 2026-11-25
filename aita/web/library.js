@@ -1,6 +1,7 @@
 "use strict";
 
 const inCatalog = location.pathname === "/library";
+const inCourses = location.pathname === "/courses";
 const catalog = $("catalog");
 let catalogState = history.state?.catalog || {};
 const sidebarGroups = {
@@ -1125,8 +1126,10 @@ if (inCatalog) {
 }
 
 Promise.all([refreshJobs(),refreshChats(),loadPreferences()]).then(async () => {
+  if (inCourses) return;
   if (inCatalog) { requestAnimationFrame(() => window.scrollTo(0,catalogState.scroll || 0)); return; }
-  const initial = new URLSearchParams(location.search).get("document");
+  const params = new URLSearchParams(location.search);
+  const initial = params.get("document") || params.get("doc");
   if (initial) await openDocument(initial);
   else if (["#reader","#tutor"].includes(location.hash)) showPanel(location.hash.slice(1));
 }).catch(report);
