@@ -21,6 +21,7 @@ const uiStrings = Object.fromEntries(`
 文字教材|Text materials
 清除相關筆記篩選|Clear related notes filter
 ＋ 匯入教材|＋ Import materials
+＋ 匯入|＋ Import
 新增分類|New folder
 教材與對話保存在這台電腦。|Materials and chats are stored on this computer.
 課程閱讀器|Course reader
@@ -154,7 +155,7 @@ PDF 圖片|PDF image
 問題|Question
 回覆|Answer
 請求未完成|Request did not complete
-放在這裡移動教材|Drop here to move the material
+放在這裡移動教材或分類|Drop here to move a material or folder
 沒有教材|No materials
 正在偵測本機模型…|Detecting local models…
 正在產生教材概述…|Generating a material summary…
@@ -171,7 +172,7 @@ BIIBO 助教|BIIBO Tutor
 教材庫欄寬|Library pane width
 直接將教材檔案拖曳至此|Drop course materials here
 支援 PDF、Markdown（.md）與 TXT，放開即可匯入閱讀；也可以從左側教材庫選擇既有教材。|Supports PDF, Markdown (.md), and TXT. Release to import right away, or pick a file from the left sidebar.
-拖曳檔案到此處，或點擊左側「＋ 匯入教材」|Drop files here, or click "+ Import materials" on the left
+拖曳檔案到此處，或點擊左側「＋ 匯入」|Drop files here, or click "+ Import" on the left
 放開即可匯入教材|Release to import files
 正在匯入拖曳的檔案…|Importing dropped files…
 僅支援 PDF、Markdown 或 TXT 檔案。|Only PDF, Markdown, or TXT files are supported.
@@ -213,6 +214,32 @@ BIIBO 助教|BIIBO Tutor
 無法匯出互動紀錄，請稍後再試。|Could not export interaction records. Please try again.
 新增教材或子資料夾|Add material or subfolder
 建立子資料夾|New subfolder
+重新命名分類|Rename folder
+重新命名課程|Rename course
+課程名稱|Course name
+課程|Lecture
+活動|Activity
+考試|Exam
+移動分類|Move folder
+移動|Move
+無法移動分類，請稍後再試。|Could not move the folder. Please try again.
+請提供分類名稱或上層分類。|Provide a folder name or parent folder.
+無效的上層分類。|Invalid parent folder.
+找不到上層分類。|Parent folder not found.
+不能移入自己或下層分類。|A folder cannot be moved into itself or its descendants.
+刪除分類|Delete folder
+API 金鑰|API key
+取得模型清單|Fetch models
+使用 CLI 預設模型|Use CLI default
+推理強度|Reasoning effort
+沿用 CLI 設定|Use CLI settings
+Fast 模式|Fast mode
+標準速度|Standard
+啟用 Fast|Enable Fast
+已設定金鑰，留空沿用|Key configured. Leave blank to keep it.
+輸入所選服務的金鑰|Enter the selected provider's key
+正在取得模型清單…|Fetching models…
+無法取得模型清單。|Could not fetch the model list.
 匯入原始 PDF|Import original PDF
 匯入課程筆記|Import course notes
 新增個人筆記|New personal note
@@ -260,6 +287,33 @@ BIIBO 助教|BIIBO Tutor
 分隔線|Horizontal divider
 字|chars
 對話管理|Conversations
+匯入|Import
+匯入類型|Import type
+對話清單|Conversation list
+對話預覽|Conversation preview
+返回清單|Back to list
+點擊左側任一對話即可預覽完整問答|Select a conversation to preview the full exchange.
+正在載入對話…|Loading conversation…
+這筆對話尚無問答。|This conversation has no messages yet.
+無法載入對話預覽。|Could not load this conversation.
+選取對話|Select conversation
+未指定教材|No linked material
+目前沒有對話紀錄。|No conversations yet.
+匯入紀錄|Imported record
+BIIBO 助教|BIIBO Tutor
+自動歸類|Auto-classify
+歸檔中…|Filing…
+無法自動歸檔。|Could not auto-file materials.
+上傳課綱或貼上內容，由 BIIBO 建立授課週次分類和課程總覽筆記。|Upload or paste your syllabus to create lecture folders and a course overview note.
+切換課程|Switch course
+更新課綱|Update syllabus
+課程名稱（選填）|Course name (optional)
+匯入這門課的教材|Import course materials
+先把教材移到這門課的教材分類，再執行歸檔。|Move materials into this course folder before auto-filing.
+請先選擇課程。|Select a course first.
+找不到這門課程。|Course not found.
+正在更新這門課程。|This course is already being updated.
+課綱匯入需要支援多課程的 BIIBO 服務。請重新載入頁面或重啟服務。|Syllabus import requires a BIIBO server with multiple-course support. Reload the page or restart the server.
 管理已儲存的對話|Manage saved conversations
 全選|Select all
 已選 0 筆|0 selected
@@ -293,6 +347,11 @@ BIIBO 幫你寫草稿|Draft with BIIBO
 歸檔分類（選填）|Target folder (optional)
 上傳課程大綱 · AI 初步規劃|Upload Syllabus · AI Planning
 開始 AI 規劃|Start AI planning
+預覽課綱|Preview syllabus
+核對原文、週次與日期。可直接編輯，每週從「Week N」開始，同週的其他項目另起一行。|Review the text, week numbers and dates. Edit in place. Start each week with “Week N” and give additional items their own line.
+擷取課綱原文與週次|Extract source text and week numbers
+核對並確認課綱|Review and confirm the syllabus
+儲存規劃與總覽筆記|Save the plan and overview note
 選擇課綱檔案或拖曳至此|Choose syllabus file or drag here
 課後自測 Q&A|Self-Test Q&A
 測驗範圍|Quiz scope
@@ -333,6 +392,8 @@ AI 模型引擎|AI model engine
 測試連線|Test connection
 正在偵測模型引擎…|Detecting model engines…
 已就緒|Ready
+已偵測 CLI|CLI detected
+已設定金鑰|Key configured
 未就緒|Not ready
 `.trim().split("\n").map(line => line.split("|")));
 
@@ -356,12 +417,12 @@ for (const node of document.querySelectorAll("[placeholder],[aria-label],[title]
 }
 function applyLanguage() {
   document.documentElement.lang = interfaceLanguage;
-  document.title = english() ? "BIIBO · Your Personal Tutor." : "BIIBO · 個人課程助教";
+  document.title = english() ? "BIIBO · Graduate Study Assistant" : "BIIBO · 研究所學習助教";
   for (const [node,value,attribute] of staticCopy) {
     if (attribute) node.setAttribute(attribute,tr(value));
     else node.nodeValue = tr(value);
   }
-  document.getElementById("language-toggle").textContent = english() ? "繁體中文" : "English";
+  document.getElementById("language-toggle").textContent = english() ? "繁中" : "EN";
 }
 applyLanguage();
 document.getElementById("language-toggle").addEventListener("click", () => {

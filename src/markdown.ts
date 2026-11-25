@@ -9,6 +9,14 @@ const md = new MarkdownIt({
   linkify: false,
   typographer: false,
 });
+md.inline.ruler.before('html_inline', 'safe_line_break', (state, silent) => {
+  if (state.src[state.pos] !== '<' && state.src[state.pos] !== '&') return false;
+  const tag = /^(?:<br[ \t]*\/?[ \t]*>|&lt;br[ \t]*\/?[ \t]*&gt;)/i.exec(state.src.slice(state.pos, state.posMax));
+  if (!tag) return false;
+  if (!silent) state.push('hardbreak', 'br', 0);
+  state.pos += tag[0].length;
+  return true;
+});
 
 function escapeHtml(text: string): string {
   return text

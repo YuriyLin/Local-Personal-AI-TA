@@ -93,12 +93,39 @@ export const MODEL_PROVIDERS = [
 
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
+export const CLI_REASONING_LEVELS = {
+  'antigravity-cli': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'codex-cli': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+} as const;
+
+export type CliProvider = keyof typeof CLI_REASONING_LEVELS;
+
+export interface CliOptions {
+  reasoning_effort?: string;
+  service_tier?: 'default' | 'fast';
+}
+
+export function isCliProvider(provider: ModelProvider): provider is CliProvider {
+  return Object.hasOwn(CLI_REASONING_LEVELS, provider);
+}
+
+export function readCliOptions(provider: ModelProvider, value: unknown): CliOptions | null {
+  if (!isCliProvider(provider) || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { reasoning_effort: effort, service_tier: tier } = value as Record<string, unknown>;
+  const levels: readonly string[] = CLI_REASONING_LEVELS[provider];
+  if (effort !== undefined && (typeof effort !== 'string' || !levels.includes(effort))) return null;
+  if (tier !== undefined && (provider !== 'codex-cli' || (tier !== 'default' && tier !== 'fast'))) return null;
+  return { reasoning_effort: effort as string | undefined, service_tier: tier };
+}
+
 export interface Preferences {
   mode: 'hint' | 'concept' | 'debug';
   provider: ModelProvider;
   model: string;
   retriever: 'tfidf' | 'dense' | 'hybrid';
   language: 'zh-Hant' | 'en';
+  cli_options?: Partial<Record<CliProvider, CliOptions>>;
 }
 
 export interface FolderRecord {
@@ -145,6 +172,8 @@ export interface CourseExamMilestone {
 }
 
 export interface CoursePlanRecord {
+  id: string;
+  root_folder_id: string | null;
   course_title: string;
   summary: string;
   source_name: string;
@@ -169,7 +198,7 @@ export const store = {
   folders: new Map<string, FolderRecord>(),
   documentInfo: new Map<string, DocumentInfoRecord>(),
   personalNotes: new Map<string, PersonalNoteRecord>(),
-  coursePlan: null as CoursePlanRecord | null,
+  coursePlans: new Map<string, CoursePlanRecord>(),
   settings: {
     mode: 'hint',
     provider: 'ollama',
@@ -212,7 +241,8 @@ interface PersistedStore {
   nextTurnId: number;
   nextSeq: number;
   settings: Preferences;
-  coursePlan: CoursePlanRecord | null;
+  coursePlans?: CoursePlanRecord[];
+  coursePlan?: Omit<CoursePlanRecord, 'id' | 'root_folder_id'> | null;
   folders: FolderRecord[];
   documentInfo: DocumentInfoRecord[];
   personalNotes: PersonalNoteRecord[];
@@ -238,7 +268,9 @@ let writeInFlight: Promise<void> | null = null;
 let persistDirty = false;
 
 export function pruneOldJobs(maxJobs = 30, maxFailedPayloads = 3): void {
-  const ordered = [...store.jobs.values()].sort((a, b) => b.seq - a.seq);
+  const ordered = [...store.jobs.values()]
+    .filter((job) => job.state === 'ready' || job.state === 'failed')
+    .sort((a, b) => b.seq - a.seq);
   let retainedFailedPayloads = 0;
   for (let i = 0; i < ordered.length; i++) {
     const job = ordered[i];
@@ -263,10 +295,23 @@ export function pruneInactiveDocuments(): void {
   for (const n of store.personalNotes.values()) {
     referencedDocIds.add(n.document_id);
   }
+  for (const turn of store.turns) {
+    for (const group of [turn.result?.citations, turn.result?.archived_citations, turn.result?.retrieved_evidence]) {
+      if (!Array.isArray(group)) continue;
+      for (const citation of group) {
+        if (typeof citation?.document_id === 'string') referencedDocIds.add(citation.document_id);
+        if (typeof citation?.source_id === 'string') referencedDocIds.add(citation.source_id);
+      }
+    }
+  }
   for (const d of store.documents.values()) {
     if (d.active && d.original_id) {
       referencedDocIds.add(d.original_id);
     }
+  }
+  for (const id of referencedDocIds) {
+    const original = store.documents.get(id)?.original_id;
+    if (original) referencedDocIds.add(original);
   }
 
   const removedIds = new Set<string>();
@@ -349,7 +394,7 @@ function buildPersistSnapshot(): { snapshot: PersistedStore; activeBlobs: Set<st
     nextTurnId: store.nextTurnId,
     nextSeq: store.nextSeq,
     settings: store.settings,
-    coursePlan: store.coursePlan,
+    coursePlans: [...store.coursePlans.values()],
     folders: [...store.folders.values()],
     documentInfo: [...store.documentInfo.values()],
     personalNotes: [...store.personalNotes.values()],
@@ -419,29 +464,25 @@ export function persistStoreNow(): void {
     persistTimer = null;
   }
 
-  try {
-    ensureDataDirs();
-    const { snapshot, activeBlobs, blobsToWrite } = buildPersistSnapshot();
-    for (const item of blobsToWrite) {
-      fs.writeFileSync(item.fullPath, item.data);
-    }
-    const tmpFile = `${STORE_FILE}.${process.pid}.sync.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(snapshot), 'utf-8');
-    fs.renameSync(tmpFile, STORE_FILE);
-    for (const entry of fs.readdirSync(BLOBS_DIR)) {
-      if (!activeBlobs.has(entry)) {
-        const fullPath = safeBlobPath(entry);
-        if (fullPath) {
-          try {
-            fs.unlinkSync(fullPath);
-          } catch {
-            // ignore
-          }
+  ensureDataDirs();
+  const { snapshot, activeBlobs, blobsToWrite } = buildPersistSnapshot();
+  for (const item of blobsToWrite) {
+    fs.writeFileSync(item.fullPath, item.data);
+  }
+  const tmpFile = `${STORE_FILE}.${process.pid}.sync.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(snapshot), 'utf-8');
+  fs.renameSync(tmpFile, STORE_FILE);
+  for (const entry of fs.readdirSync(BLOBS_DIR)) {
+    if (!activeBlobs.has(entry)) {
+      const fullPath = safeBlobPath(entry);
+      if (fullPath) {
+        try {
+          fs.rmSync(fullPath, { force: true });
+        } catch {
+          // Orphan cleanup can retry after the next successful snapshot.
         }
       }
     }
-  } catch (err) {
-    console.error('[store] Failed to persist local JSON store:', err);
   }
 }
 
@@ -453,12 +494,12 @@ export function schedulePersist(): void {
   }, 150);
 }
 
-export function loadStore(): void {
-  if (!fs.existsSync(STORE_FILE)) return;
+export function loadStore(): boolean {
+  if (!fs.existsSync(STORE_FILE)) return false;
   try {
     const rawText = fs.readFileSync(STORE_FILE, 'utf-8');
     const data = JSON.parse(rawText) as Partial<PersistedStore>;
-    if (!data || data.schema !== 'biibo-store-v1') return;
+    if (!data || data.schema !== 'biibo-store-v1') throw new Error('Unknown store schema.');
 
     store.documents.clear();
     store.chunks.clear();
@@ -587,17 +628,39 @@ export function loadStore(): void {
         typeof s.provider === 'string' && (MODEL_PROVIDERS as readonly string[]).includes(s.provider)
           ? (s.provider as ModelProvider)
           : 'ollama';
+      const cliOptions: Preferences['cli_options'] = {};
+      for (const candidate of MODEL_PROVIDERS) {
+        if (!isCliProvider(candidate)) continue;
+        const options = readCliOptions(candidate, s.cli_options?.[candidate]);
+        if (options) cliOptions[candidate] = options;
+      }
       store.settings = {
         mode: s.mode === 'concept' || s.mode === 'debug' ? s.mode : 'hint',
         provider,
         model: typeof s.model === 'string' && s.model.trim() ? s.model : store.settings.model,
         retriever: s.retriever === 'dense' || s.retriever === 'hybrid' ? s.retriever : 'tfidf',
         language: s.language === 'en' ? 'en' : 'zh-Hant',
+        cli_options: cliOptions,
       };
     }
 
-    if (data.coursePlan && typeof data.coursePlan === 'object') {
-      store.coursePlan = data.coursePlan;
+    store.coursePlans.clear();
+    if (Array.isArray(data.coursePlans)) {
+      for (const plan of data.coursePlans) {
+        if (plan?.id && Array.isArray(plan.weeks)) store.coursePlans.set(plan.id, plan);
+      }
+    } else if (data.coursePlan && Array.isArray(data.coursePlan.weeks)) {
+      const legacy = data.coursePlan;
+      const weekIds = new Set(legacy.weeks.map(week => week.folder_id));
+      const parents = new Set([...weekIds].flatMap(id => {
+        const parent = id ? store.folders.get(id)?.parent_id : null;
+        return parent && !weekIds.has(parent) ? [parent] : [];
+      }));
+      const root = parents.size === 1 ? [...parents][0] : 'legacy-course-materials';
+      if (!store.folders.has(root)) {
+        store.folders.set(root, { id: root, name: legacy.course_title, parent_id: null });
+      }
+      store.coursePlans.set('legacy-course', { ...legacy, id: 'legacy-course', root_folder_id: root });
     }
 
     if (typeof data.nextTurnId === 'number' && data.nextTurnId > 0) {
@@ -606,7 +669,8 @@ export function loadStore(): void {
     if (typeof data.nextSeq === 'number' && data.nextSeq > 0) {
       store.nextSeq = data.nextSeq;
     }
+    return true;
   } catch (err) {
-    console.error('[store] Failed to load local JSON store:', err);
+    throw new Error('Could not open the BIIBO store. Restore a valid backup before starting.', { cause: err });
   }
 }

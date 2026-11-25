@@ -142,11 +142,22 @@ $("right-tab-tutor")?.addEventListener("click", () => setRightPaneTab("tutor", t
 $("right-tab-notes")?.addEventListener("click", () => {
   const sourceId = typeof originalDocument === "function" ? (originalDocument(reader.doc) || reader.doc?.id || null) : null;
   if (typeof openNotes === "function") {
-    openNotes(sourceId, "", reader.doc?.note_id || "").catch(report);
+    openNotes(sourceId, "", reader.doc?.note_id || "", false).catch(report);
   } else {
     setRightPaneTab("notes", true);
   }
 });
+const rightTabs = [$("right-tab-tutor"), $("right-tab-notes")];
+for (const tab of rightTabs) {
+  tab?.addEventListener("keydown", event => {
+    const target = event.key === "Home" ? rightTabs[0] : event.key === "End" ? rightTabs[1]
+      : ["ArrowLeft", "ArrowRight"].includes(event.key) ? rightTabs.find(item => item !== tab) : null;
+    if (!target) return;
+    event.preventDefault();
+    if (target !== tab) target.click();
+    target.focus();
+  });
+}
 for (const a of document.querySelectorAll(".narrow-nav a,.skip")) {
   a.addEventListener("click", event => {
     if (!["#library","#reader","#tutor"].includes(a.getAttribute("href"))) return;
@@ -242,7 +253,7 @@ readRoot.addEventListener("dragleave", () => {
   if (!readerDropDepth) {
     zone.classList.remove("is-dragover");
     const status = $("reader-drop-status");
-    if (status) status.textContent = tr("拖曳檔案到此處，或點擊左側「＋ 匯入教材」");
+    if (status) status.textContent = tr("拖曳檔案到此處，或點擊左側「＋ 匯入」");
   }
 });
 readRoot.addEventListener("drop", async event => {
@@ -382,6 +393,7 @@ function renderReader() {
   positionViewPill();
   const isOriginal = reader.doc.kind === "pdf" && reader.mode === "original";
   readRoot.classList.toggle("show-pdf", isOriginal);
+  readRoot.classList.toggle("reading-personal", reader.doc.kind === "personal");
   if (isOriginal) {
     readRoot.replaceChildren(element("p", tr("正在載入 PDF…"), "reader-message"));
     renderPdf(frame).catch(() => {
@@ -475,6 +487,19 @@ function renderParsed() {
     wrap.tabIndex = -1;
     wrap.innerHTML = block.html;
     if (!wrap.firstChild) continue;
+    if (reader.doc.kind === "personal") {
+      for (const table of wrap.querySelectorAll("table")) {
+        const cells = table.querySelector("thead tr")?.cells;
+        if (!cells || !["週次", "Week"].includes(cells[0]?.textContent.trim()) ||
+          !["重要進度", "Key Notes"].includes(cells[cells.length - 1]?.textContent.trim())) continue;
+        const scroller = element("div", undefined, "schedule-table-wrap");
+        scroller.tabIndex = 0;
+        scroller.setAttribute("role", "region");
+        scroller.setAttribute("aria-label", english() ? "Weekly schedule" : "每週課程時程");
+        table.replaceWith(scroller);
+        scroller.append(table);
+      }
+    }
     for (const heading of wrap.querySelectorAll("h1,h2")) {
       const title = element("h3");
       title.append(...heading.childNodes);

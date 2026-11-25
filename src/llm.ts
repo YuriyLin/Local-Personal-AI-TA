@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
-import { EngineGroup, ModelProvider, store } from './store.js';
+import { CLI_REASONING_LEVELS, CliOptions, CliProvider, EngineGroup, ModelProvider, isCliProvider, store } from './store.js';
 
 export const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '');
 export const LMSTUDIO_URL = (process.env.LMSTUDIO_URL || 'http://127.0.0.1:1234').replace(/\/+$/, '');
@@ -22,6 +22,8 @@ export interface ChatCompletionOptions {
   maxTokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  cloudKey?: string;
+  cliOptions?: CliOptions;
 }
 
 export interface ChatCompletionResult {
@@ -55,6 +57,13 @@ export interface EngineStatus extends EngineDescriptor {
   status_text: string;
   status_text_en: string;
   detected_binary?: string | null;
+  reasoning_levels?: readonly string[];
+  model_capabilities?: CliModelCatalog['model_capabilities'];
+}
+
+interface CliModelCatalog {
+  models: string[];
+  model_capabilities: Record<string, { reasoning_levels: string[]; fast?: boolean }>;
 }
 
 export class LlmError extends Error {
@@ -103,9 +112,9 @@ export const ENGINE_CATALOG: readonly EngineDescriptor[] = [
     description: 'Invoke local Antigravity CLI agent directly',
     description_zh: '透過本機 Antigravity CLI 命令列執行',
     default_model: 'default',
-    recommended_models: ['default', 'gemini-4-hydrogen', 'gemini-4-neon', 'claude-sonnet-4'],
+    recommended_models: ['default'],
     env_var: null,
-    cli_binaries: ['antigravity', 'agy'],
+    cli_binaries: ['agy', 'antigravity'],
     allow_custom_model: true,
   },
   {
@@ -129,7 +138,7 @@ export const ENGINE_CATALOG: readonly EngineDescriptor[] = [
     description: 'Invoke local OpenAI Codex CLI in non-interactive mode',
     description_zh: '透過本機 Codex CLI（codex）命令列執行',
     default_model: 'default',
-    recommended_models: ['default', 'o4-mini', 'gpt-4.1', 'codex-mini-latest'],
+    recommended_models: ['default'],
     env_var: null,
     cli_binaries: ['codex'],
     allow_custom_model: true,
@@ -146,7 +155,7 @@ export const ENGINE_CATALOG: readonly EngineDescriptor[] = [
     default_model: 'gemini-4-hydrogen',
     recommended_models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-4-neon', 'gemini-4-carbon'],
     env_var: 'GEMINI_API_KEY',
-    allow_custom_model: false,
+    allow_custom_model: true,
   },
   {
     id: 'openai',
@@ -240,23 +249,27 @@ function isEn(): boolean {
 }
 
 // Safe PATH lookup without spawning a shell (`which`).
-function findExecutableOnPath(candidates: string[]): string | null {
+function resolveCli(provider: CliProvider): { bin: string; leadingArgs: string[]; label: string } | null {
+  const desc = getEngineDescriptor(provider);
   const envPath = process.env.PATH || '';
-  const dirs = envPath.split(path.delimiter).filter(Boolean);
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
-
-  for (const bin of candidates) {
-    // Only permit bare executable names from our static allowlist.
-    if (!/^[a-zA-Z0-9_-]+$/.test(bin)) continue;
-    for (const dir of dirs) {
-      for (const ext of exts) {
-        const candidate = path.join(dir, `${bin}${ext}`);
-        try {
-          fs.accessSync(candidate, fs.constants.X_OK);
-          return candidate;
-        } catch {
-          // continue searching PATH
-        }
+  const dirs = envPath.split(path.delimiter).map(dir => dir.trim().replace(/^"|"$/g, '')).filter(path.isAbsolute);
+  const windows = process.platform === 'win32';
+  if (windows && provider === 'antigravity-cli' && process.env.LOCALAPPDATA) {
+    dirs.push(path.join(process.env.LOCALAPPDATA, 'agy', 'bin'));
+  }
+  if (windows && provider === 'claude-code') dirs.push(path.join(os.homedir(), '.local', 'bin'));
+  if (windows && provider === 'codex-cli' && process.env.APPDATA) dirs.push(path.join(process.env.APPDATA, 'npm'));
+  for (const dir of dirs) {
+    for (const binary of desc.cli_binaries || []) {
+      const candidate = path.join(dir, binary + (windows ? '.exe' : ''));
+      if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+        return { bin: candidate, leadingArgs: [], label: path.basename(candidate) };
+      }
+    }
+    if (windows && provider === 'codex-cli') {
+      const entry = path.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      if (fs.existsSync(path.join(dir, 'codex.cmd')) && fs.statSync(entry, { throwIfNoEntry: false })?.isFile()) {
+        return { bin: process.execPath, leadingArgs: [entry], label: 'codex (npm)' };
       }
     }
   }
@@ -340,14 +353,177 @@ function getSafeCloudBaseUrl(envName: string, defaultUrl: string): string {
   if (!raw) return defaultUrl;
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol !== 'https:') return defaultUrl;
-    if (isBlockedHost(parsed.hostname)) {
-      return defaultUrl;
+    if (parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.search && !parsed.hash &&
+      !isBlockedHost(parsed.hostname)) {
+      return raw.replace(/\/+$/, '');
     }
-    return raw.replace(/\/+$/, '');
-  } catch {
-    return defaultUrl;
+  } catch { /* Report invalid configuration without displaying credentials or URLs. */ }
+  throw new LlmError(422, isEn() ? `Invalid HTTPS address in ${envName}.` : `${envName} 的 HTTPS 位址無效。`);
+}
+
+const CLOUD_COMPAT = {
+  openai: ['OPENAI_BASE_URL', 'https://api.openai.com/v1'],
+  opencode: ['OPENCODE_BASE_URL', 'https://opencode.ai/zen/v1'],
+  deepseek: ['DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1'],
+  openrouter: ['OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'],
+} as const;
+function compatibleBaseUrl(provider: keyof typeof CLOUD_COMPAT): string {
+  const [variable, standardUrl] = CLOUD_COMPAT[provider];
+  return getSafeCloudBaseUrl(variable, standardUrl);
+}
+const CLOUD_KEY_FILE = path.join(process.cwd(), 'data', 'provider-keys.json');
+const anthropicApiBase = () => getSafeCloudBaseUrl('ANTHROPIC_BASE_URL', 'https://api.anthropic.com').replace(/\/v1$/, '') + '/v1';
+
+function readCloudKeys(): Partial<Record<ModelProvider, string>> {
+  try {
+    return JSON.parse(fs.readFileSync(CLOUD_KEY_FILE, 'utf-8'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw err;
   }
+}
+
+export function parseCloudKey(value: unknown): string {
+  if (value === undefined || value === '') return '';
+  if (typeof value === 'string' && value.length <= 1024 && /^[\x21-\x7E]*$/.test(value.trim())) return value.trim();
+  throw new LlmError(422, isEn() ? 'Invalid API key format.' : 'API 金鑰格式無效。');
+}
+
+export function saveCloudKey(provider: ModelProvider, key: string): void {
+  if (getEngineDescriptor(provider).group !== 'cloud') {
+    throw new LlmError(422, isEn() ? 'Choose a cloud provider before saving a key.' : '請選擇雲端服務後再儲存金鑰。');
+  }
+  const keys = readCloudKeys();
+  keys[provider] = key;
+  fs.mkdirSync(path.dirname(CLOUD_KEY_FILE), { recursive: true });
+  const temporary = `${CLOUD_KEY_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(keys), { mode: 0o600 });
+  fs.renameSync(temporary, CLOUD_KEY_FILE);
+}
+
+function configuredCloudKey(provider: ModelProvider): string {
+  const envVar = getEngineDescriptor(provider).env_var;
+  if (!envVar) return '';
+  const saved = readCloudKeys()[provider];
+  return (typeof saved === 'string' && saved) || process.env[envVar]?.trim() || '';
+}
+
+function requireCloudKey(provider: ModelProvider, draft?: string): string {
+  const key = draft || configuredCloudKey(provider);
+  if (key) return key;
+  throw new LlmError(422, isEn() ? 'Enter an API key for this provider.' : '請輸入此雲端服務的 API 金鑰。');
+}
+
+const ANTIGRAVITY_EFFORT_SUFFIX = /-(low|medium|high|xhigh|max)$/;
+
+export function parseCodexModels(raw: string): CliModelCatalog {
+  const { models } = JSON.parse(raw) ?? {};
+  const entries: Array<[string, CliModelCatalog['model_capabilities'][string]]> = [];
+  if (Array.isArray(models)) {
+    const levels: readonly string[] = CLI_REASONING_LEVELS['codex-cli'];
+    for (const model of models) {
+      if (model?.visibility !== 'list' || !isSafeModelName(model.slug) || model.slug === 'default') continue;
+      const supported = model.supported_reasoning_levels;
+      const tiers = model.service_tiers;
+      const speeds = model.additional_speed_tiers;
+      entries.push([model.slug, {
+        reasoning_levels: Array.isArray(supported)
+          ? supported.map(level => level?.effort).filter(effort => levels.includes(effort))
+          : [...levels],
+        fast: Array.isArray(tiers) || Array.isArray(speeds)
+          ? (Array.isArray(tiers) && tiers.some(tier => tier?.id === 'priority' || tier?.id === 'fast'))
+            || (Array.isArray(speeds) && speeds.includes('fast'))
+          : undefined,
+      }]);
+    }
+  }
+  const capabilities = new Map(entries);
+  return { models: ['default', ...capabilities.keys()], model_capabilities: Object.fromEntries(capabilities) };
+}
+
+function cachedCodexModels(): CliModelCatalog {
+  try {
+    const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    return parseCodexModels(fs.readFileSync(path.join(codexHome, 'models_cache.json'), 'utf8'));
+  } catch {
+    return { models: ['default'], model_capabilities: {} };
+  }
+}
+
+export async function discoverCliModels(provider: 'codex-cli' | 'antigravity-cli', refresh = false): Promise<CliModelCatalog> {
+  if (provider === 'codex-cli') {
+    const cached = cachedCodexModels();
+    if (!refresh && cached.models.length > 1) return cached;
+    try {
+      const result = await invokeCli(provider, ['debug', 'models'], '', 12_000, 4 * 1024 * 1024);
+      if (result.code === 0) {
+        const catalog = parseCodexModels(result.stdout);
+        if (catalog.models.length > 1) return catalog;
+      }
+    } catch { /* Older versions can use their on-disk catalog. */ }
+    return cached;
+  }
+  const { stdout, stderr, code } = await invokeCli(provider, ['models'], '', 20_000);
+  if (code !== 0) throw cliFailure(provider, stdout + '\n' + stderr);
+  const names = new Set(['default']);
+  const efforts = new Map<string, Set<string>>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const id = line.split('\t', 1)[0].trim();
+    if (!isSafeModelName(id)) continue;
+    const variant = ANTIGRAVITY_EFFORT_SUFFIX.exec(id);
+    const model = variant ? id.slice(0, variant.index) : id;
+    names.add(model);
+    if (variant) {
+      const levels = efforts.get(model) || new Set();
+      levels.add(variant[1]);
+      efforts.set(model, levels);
+    }
+  }
+  return {
+    models: [...names],
+    model_capabilities: Object.fromEntries([...efforts].map(([model, levels]) => [
+      model, { reasoning_levels: CLI_REASONING_LEVELS[provider].filter(level => levels.has(level)) },
+    ])),
+  };
+}
+
+export async function listProviderModels(provider: ModelProvider, draftKey?: string): Promise<string[]> {
+  if (provider === 'antigravity-cli' || provider === 'codex-cli') {
+    return (await discoverCliModels(provider)).models;
+  }
+  if (getEngineDescriptor(provider).group !== 'cloud') return getEngineDescriptor(provider).recommended_models;
+  const key = requireCloudKey(provider, draftKey);
+  let url: string;
+  let headers: Record<string, string>;
+  if (provider === 'gemini') {
+    url = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=100';
+    headers = { 'x-goog-api-key': key };
+  } else if (provider === 'claude') {
+    url = `${anthropicApiBase()}/models?limit=100`;
+    headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  } else {
+    url = `${compatibleBaseUrl(provider as keyof typeof CLOUD_COMPAT)}/models`;
+    headers = { Authorization: `Bearer ${key}` };
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+  } catch {
+    throw new LlmError(503, isEn() ? 'Could not reach the cloud model list.' : '無法連線取得雲端模型清單。');
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new LlmError(401, isEn() ? 'The provider rejected the API key.' : '雲端服務拒絕此 API 金鑰。');
+  }
+  if (!response.ok) throw new LlmError(502, isEn() ? 'The provider could not list models.' : '雲端服務暫時無法列出模型。');
+  const raw = await response.json() as {
+    data?: Array<{ id?: unknown }>;
+    models?: Array<{ name?: unknown; supportedGenerationMethods?: string[] }>;
+  };
+  const models = provider === 'gemini'
+    ? raw.models?.filter(model => model.supportedGenerationMethods?.includes('generateContent')).map(model =>
+      typeof model.name === 'string' ? model.name.replace(/^models\//, '') : '')
+    : raw.data?.map(model => model.id);
+  return [...new Set((models || []).filter(isSafeModelName))].sort().slice(0, 400);
 }
 
 export async function probeOllamaModels(timeoutMs = 1500): Promise<string[] | null> {
@@ -378,8 +554,11 @@ export async function probeLmStudioModels(timeoutMs = 1500): Promise<string[] | 
   }
 }
 
-export async function discoverEngines(): Promise<EngineStatus[]> {
-  const [ollamaModels, lmStudioModels] = await Promise.all([probeOllamaModels(), probeLmStudioModels()]);
+export async function discoverEngines(refresh = false): Promise<EngineStatus[]> {
+  const [ollamaModels, lmStudioModels, codexCatalog] = await Promise.all([
+    probeOllamaModels(), probeLmStudioModels(),
+    resolveCli('codex-cli') ? discoverCliModels('codex-cli', refresh) : null,
+  ]);
 
   return ENGINE_CATALOG.map((desc) => {
     if (desc.id === 'ollama') {
@@ -426,30 +605,34 @@ export async function discoverEngines(): Promise<EngineStatus[]> {
       };
     }
 
-    if (desc.group === 'cli') {
-      const detectedBinary = findExecutableOnPath(desc.cli_binaries || []);
+    if (isCliProvider(desc.id)) {
+      const detected = resolveCli(desc.id);
+      const detectedBinary = detected?.label || null;
       const available = Boolean(detectedBinary);
+      const catalog = desc.id === 'codex-cli' ? codexCatalog : null;
       return {
         ...desc,
         available,
-        detected_binary: detectedBinary ? path.basename(detectedBinary) : null,
-        detected_models: available ? desc.recommended_models : [],
-        models: desc.recommended_models,
-        status_text: available ? `已偵測本機 CLI（${path.basename(detectedBinary!)}）` : '尚未安裝本機 CLI',
-        status_text_en: available ? `CLI detected (${path.basename(detectedBinary!)})` : 'CLI not found on PATH',
+        detected_binary: detectedBinary,
+        detected_models: catalog?.models.slice(1) || [],
+        models: catalog?.models || desc.recommended_models,
+        model_capabilities: catalog?.model_capabilities,
+        reasoning_levels: CLI_REASONING_LEVELS[desc.id],
+        status_text: available ? `已偵測 ${detectedBinary} · 尚未測試` : '尚未安裝本機 CLI',
+        status_text_en: available ? `Detected ${detectedBinary} · Untested` : 'CLI not found on PATH',
       };
     }
 
     // Cloud API
     const envVar = desc.env_var;
-    const hasKey = Boolean(envVar && process.env[envVar]?.trim());
+    const hasKey = Boolean(envVar && configuredCloudKey(desc.id));
     return {
       ...desc,
       available: hasKey,
-      detected_models: hasKey ? desc.recommended_models : [],
+      detected_models: [],
       models: desc.recommended_models,
-      status_text: hasKey ? '已就緒（伺服器環境金鑰）' : `待設定伺服器環境變數 ${envVar}`,
-      status_text_en: hasKey ? 'Ready (server key configured)' : `Set ${envVar} on server`,
+      status_text: hasKey ? '已設定金鑰 · 尚未測試' : '待設定 API 金鑰',
+      status_text_en: hasKey ? 'Key configured · Untested' : 'API key required',
     };
   });
 }
@@ -544,7 +727,7 @@ async function runOpenAiCompatibleChat(params: {
   }
 
   const preparedMessages = withSchemaHint(opts.messages, opts.jsonSchema, opts.expectJson);
-  const isOpenAiReasoning = provider === 'openai' && /^(o1|o3|o4)(?:$|-)/i.test(model);
+  const isOpenAiReasoning = provider === 'openai' && /^(o[1-9]|gpt-5|gpt-6)(?:$|[.-])/i.test(model);
   const body: Record<string, unknown> = {
     model,
     messages: preparedMessages,
@@ -616,15 +799,7 @@ async function runOpenAiCompatibleChat(params: {
 }
 
 async function runGeminiChat(model: string, opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new LlmError(
-      503,
-      isEn()
-        ? 'GEMINI_API_KEY is not configured on the server.'
-        : '伺服器尚未設定 GEMINI_API_KEY，請於環境變數設定後再使用 Gemini。'
-    );
-  }
+  const apiKey = requireCloudKey('gemini', opts.cloudKey);
 
   const ai = new GoogleGenAI({
     apiKey,
@@ -714,15 +889,7 @@ async function runGeminiChat(model: string, opts: ChatCompletionOptions): Promis
 }
 
 async function runAnthropicChat(model: string, opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) {
-    throw new LlmError(
-      503,
-      isEn()
-        ? 'ANTHROPIC_API_KEY is not configured on the server.'
-        : '伺服器尚未設定 ANTHROPIC_API_KEY，請於環境變數設定後再使用 Claude。'
-    );
-  }
+  const apiKey = requireCloudKey('claude', opts.cloudKey);
 
   const prepared = withSchemaHint(opts.messages, opts.jsonSchema, opts.expectJson);
   const systemText = prepared
@@ -746,7 +913,7 @@ async function runAnthropicChat(model: string, opts: ChatCompletionOptions): Pro
 
   let res: Response;
   try {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
+    res = await fetch(`${anthropicApiBase()}/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -823,7 +990,7 @@ function flattenMessagesForCli(
   return sections.join('\n\n');
 }
 
-function buildMinimalCliEnv(): NodeJS.ProcessEnv {
+function buildMinimalCliEnv(provider: CliProvider): NodeJS.ProcessEnv {
   // Pass only standard OS/user session variables; never leak unrelated cloud API keys to child CLIs.
   const allowKeys = [
     'PATH',
@@ -841,9 +1008,13 @@ function buildMinimalCliEnv(): NodeJS.ProcessEnv {
     'XDG_DATA_HOME',
     'APPDATA',
     'LOCALAPPDATA',
-    'USERPROFILE',
-    'SYSTEMROOT',
+    'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'NODE_EXTRA_CA_CERTS',
+    'SYSTEMROOT', 'COMSPEC', 'PATHEXT',
   ];
+  if (provider === 'claude-code') {
+    allowKeys.push('ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN');
+  }
   const env: NodeJS.ProcessEnv = { NO_COLOR: '1' };
   for (const key of allowKeys) {
     if (process.env[key] !== undefined) {
@@ -853,142 +1024,111 @@ function buildMinimalCliEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function runLocalCli(
-  provider: 'antigravity-cli' | 'claude-code' | 'codex-cli',
-  model: string,
-  opts: ChatCompletionOptions
-): Promise<ChatCompletionResult> {
+function invokeCli(provider: CliProvider, args: string[], input: string, timeoutMs: number, stdoutLimit = 512 * 1024): Promise<{ stdout: string; stderr: string; code: number | null }> {
   const desc = getEngineDescriptor(provider);
-  const binPath = findExecutableOnPath(desc.cli_binaries || []);
-  if (!binPath) {
-    return Promise.reject(
-      new LlmError(
-        503,
-        isEn()
-          ? `${desc.name} is not installed or not found on PATH. Install it locally or switch engines in Settings.`
-          : `這台環境未偵測到本機 ${desc.name_zh}，請確認已安裝並加入 PATH，或於「助教設定」改選其他模型引擎。`
-      )
-    );
+  const executable = resolveCli(provider);
+  if (!executable) {
+    throw new LlmError(503, isEn() ? `Install ${desc.name} locally and refresh detection.` : `找不到 ${desc.name_zh}。請安裝後重新偵測。`);
   }
-
-  const promptText = flattenMessagesForCli(opts.messages, opts.jsonSchema, Boolean(opts.expectJson || opts.jsonSchema));
-  const useModelFlag = model && model !== 'default' && isSafeModelName(model);
-
-  let args: string[];
-  if (provider === 'claude-code') {
-    // Disable file/shell agent tools for pure text generation from untrusted study documents.
-    args = ['-p', '--output-format', 'text', '--tools', ''];
-    if (useModelFlag) args.push('--model', model);
-  } else if (provider === 'codex-cli') {
-    args = ['exec', '-'];
-    if (useModelFlag) args.push('-m', model);
-  } else {
-    // Antigravity CLI non-interactive prompt via stdin
-    args = ['prompt'];
-    if (useModelFlag) args.push('--model', model);
-  }
-
-  const timeoutMs = opts.timeoutMs ?? 90_000;
-
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'biibo-cli-'));
   return new Promise((resolve, reject) => {
-    // Strictly shell: false, isolated tmpdir cwd, minimal env, and prompt passed via stdin.
-    const child = spawn(binPath, args, {
-      shell: false,
-      cwd: os.tmpdir(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: buildMinimalCliEnv(),
+    const child = spawn(executable.bin, [...executable.leadingArgs, ...args], {
+      cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: buildMinimalCliEnv(provider),
     });
-
     let stdout = '';
     let stderr = '';
-    let settled = false;
-    let killTimer: ReturnType<typeof setTimeout> | null = null;
-    const MAX_CAPTURE = 512 * 1024;
-
-    const cleanupTimers = () => {
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
-    };
-
     const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      killTimer = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          // already exited
-        }
-      }, 3000);
-      reject(
-        new LlmError(
-          504,
-          isEn() ? `${desc.name} timed out.` : `${desc.name_zh} 執行逾時，請稍後再試。`
-        )
-      );
+      child.kill();
+      reject(new LlmError(504, isEn() ? `${desc.name} timed out.` : `${desc.name_zh} 執行逾時，請確認登入與連線。`));
     }, timeoutMs);
-
-    child.stdin.on('error', () => {
-      // Prevent unhandled EPIPE if the child exits before stdin finishes writing.
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout = (stdout + chunk).slice(-stdoutLimit); });
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-32 * 1024); });
+    child.stdin.on('error', () => { /* The CLI can exit before it finishes reading stdin. */ });
+    child.on('error', () => {
+      reject(new LlmError(503, isEn() ? `Could not start ${desc.name}.` : `無法啟動 ${desc.name_zh}，請確認安裝狀態。`));
     });
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length < MAX_CAPTURE) {
-        stdout += chunk.toString('utf-8');
-      }
+    child.on('close', code => {
+      clearTimeout(timer);
+      try { fs.rmdirSync(cwd); } catch { /* Leave files created by the CLI in its temporary directory. */ }
+      resolve({ stdout, stderr, code });
     });
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < 32 * 1024) {
-        stderr += chunk.toString('utf-8');
-      }
-    });
-
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      console.warn(`[llm] Failed to spawn ${desc.name} (${err.code || err.message})`);
-      if (settled) return;
-      settled = true;
-      cleanupTimers();
-      reject(
-        new LlmError(
-          503,
-          isEn() ? `Could not start ${desc.name}.` : `無法啟動本機 ${desc.name_zh}，請確認工具狀態。`
-        )
-      );
-    });
-
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      cleanupTimers();
-      const output = stdout.trim();
-      if (code !== 0 || !output) {
-        const hint = stderr.trim().slice(0, 140);
-        reject(
-          new LlmError(
-            502,
-            isEn()
-              ? `${desc.name} exited with an error.${hint ? ` (${hint})` : ''}`
-              : `${desc.name_zh} 執行未完成，請確認已完成本機登入與授權後再試。`
-          )
-        );
-        return;
-      }
-      resolve({
-        text: output,
-        provider,
-        model,
-        prompt_tokens: null,
-        output_tokens: null,
-      });
-    });
-
-    child.stdin.write(promptText, 'utf-8');
-    child.stdin.end();
+    child.stdin.end(input, 'utf8');
   });
+}
+
+export function parseCliReply(provider: CliProvider, stdout: string): string {
+  if (provider === 'codex-cli') {
+    let latest = '';
+    for (const line of stdout.split(/\r?\n/)) {
+      try {
+        const event = JSON.parse(line);
+        if (event.type === 'turn.failed') return '';
+        if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') {
+          latest = event.item.text.trim();
+        }
+      } catch { /* Ignore progress and other non-JSON lines. */ }
+    }
+    return latest;
+  }
+  try {
+    const reply = parseJsonFromLlm<{ is_error?: boolean; subtype?: string; result?: unknown; status?: string; response?: unknown }>(stdout);
+    if (provider === 'antigravity-cli') return reply.status === 'SUCCESS' && typeof reply.response === 'string' ? reply.response.trim() : '';
+    return !reply.is_error && (!reply.subtype || reply.subtype === 'success') && typeof reply.result === 'string' ? reply.result.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function cliFailure(provider: CliProvider, detail: string): LlmError {
+  const name = getEngineDescriptor(provider).name;
+  if (/not logged|login required|unauthenticated|unauthorized|sign in|log in/i.test(detail)) {
+    return new LlmError(401, isEn() ? `Sign in to ${name} in your terminal, then retry.` : `請先在終端機登入 ${name} 再測試。`);
+  }
+  if (/quota|rate.limit|usage limit/i.test(detail)) {
+    return new LlmError(429, isEn() ? `${name} reached its usage limit.` : `${name} 已達使用量限制。`);
+  }
+  if (/unknown model|model.*(?:not found|not available|not supported)|invalid model/i.test(detail)) {
+    return new LlmError(422, isEn() ? `Select an available model for ${name}, or use the CLI default.`
+      : `請為 ${name} 選擇可用模型，或使用 CLI 預設模型。`);
+  }
+  return new LlmError(502, isEn() ? `${name} did not return a response. Check its version and login in your terminal.`
+    : `${name} 未回傳模型回覆。請在終端機確認版本與登入狀態。`);
+}
+
+export function cliGenerationArgs(provider: CliProvider, model: string, options: CliOptions = {}): string[] {
+  const useModel = model !== 'default' && isSafeModelName(model);
+  let args: string[];
+  if (provider === 'claude-code') {
+    args = ['--print', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--mcp-config',
+      '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence'];
+    if (useModel) args.push('--model', model);
+    if (options.reasoning_effort) args.push('--effort', options.reasoning_effort);
+  } else if (provider === 'codex-cli') {
+    args = ['-a', 'never', '--disable', 'shell_tool', '--disable', 'apps', '--disable', 'plugins', '-c', 'mcp_servers={}'];
+    if (options.reasoning_effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(options.reasoning_effort)}`);
+    if (options.service_tier) args.push('-c', `service_tier=${JSON.stringify(options.service_tier)}`);
+    args.push('exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--json');
+    if (useModel) args.push('--model', model);
+    args.push('-');
+  } else {
+    args = ['--output-format', 'json', '--mode', 'plan', '--sandbox'];
+    const variant = useModel ? ANTIGRAVITY_EFFORT_SUFFIX.exec(model) : null;
+    if (useModel) {
+      args.push('--model', variant ? model.slice(0, variant.index) : model);
+    }
+    const effort = options.reasoning_effort || variant?.[1];
+    if (effort) args.push('--effort', effort);
+  }
+  return args;
+}
+
+async function runLocalCli(provider: CliProvider, model: string, opts: ChatCompletionOptions): Promise<ChatCompletionResult> {
+  const prompt = flattenMessagesForCli(opts.messages, opts.jsonSchema, Boolean(opts.expectJson || opts.jsonSchema));
+  const args = cliGenerationArgs(provider, model, opts.cliOptions ?? store.settings.cli_options?.[provider]);
+  const { stdout, stderr, code } = await invokeCli(provider, args, prompt, opts.timeoutMs ?? 90_000);
+  const text = code === 0 ? parseCliReply(provider, stdout) : '';
+  if (!text) throw cliFailure(provider, stdout + '\n' + stderr);
+  return { text, provider, model, prompt_tokens: null, output_tokens: null };
 }
 
 // ============================================================
@@ -1022,85 +1162,26 @@ export async function runChatCompletion(opts: ChatCompletionOptions): Promise<Ch
     case 'gemini':
       return runGeminiChat(model, opts);
 
-    case 'openai': {
-      const apiKey = process.env.OPENAI_API_KEY?.trim();
-      if (!apiKey) {
-        throw new LlmError(
-          503,
-          isEn() ? 'OPENAI_API_KEY is not configured on the server.' : '伺服器尚未設定 OPENAI_API_KEY，請設定環境變數後再使用 OpenAI。'
-        );
-      }
-      return runOpenAiCompatibleChat({
-        provider: 'openai',
-        providerLabel: 'OpenAI',
-        baseUrl: getSafeCloudBaseUrl('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
-        apiKey,
-        model,
-        opts,
-      });
-    }
-
     case 'claude':
       return runAnthropicChat(model, opts);
 
-    case 'opencode': {
-      const apiKey = process.env.OPENCODE_API_KEY?.trim();
-      if (!apiKey) {
-        throw new LlmError(
-          503,
-          isEn() ? 'OPENCODE_API_KEY is not configured on the server.' : '伺服器尚未設定 OPENCODE_API_KEY，請設定環境變數後再使用 OpenCode。'
-        );
-      }
+    case 'openai':
+    case 'opencode':
+    case 'deepseek':
+    case 'openrouter':
       return runOpenAiCompatibleChat({
-        provider: 'opencode',
-        providerLabel: 'OpenCode',
-        baseUrl: getSafeCloudBaseUrl('OPENCODE_BASE_URL', 'https://opencode.ai/zen/v1'),
-        apiKey,
+        provider,
+        providerLabel: desc.name,
+        baseUrl: compatibleBaseUrl(provider),
+        apiKey: requireCloudKey(provider, opts.cloudKey),
         model,
         opts,
+        extraHeaders: provider === 'openrouter' ? { 'X-Title': 'BIIBO Personal Tutor' } : undefined,
       });
-    }
-
-    case 'deepseek': {
-      const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
-      if (!apiKey) {
-        throw new LlmError(
-          503,
-          isEn() ? 'DEEPSEEK_API_KEY is not configured on the server.' : '伺服器尚未設定 DEEPSEEK_API_KEY，請設定環境變數後再使用 DeepSeek。'
-        );
-      }
-      return runOpenAiCompatibleChat({
-        provider: 'deepseek',
-        providerLabel: 'DeepSeek',
-        baseUrl: getSafeCloudBaseUrl('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1'),
-        apiKey,
-        model,
-        opts,
-      });
-    }
-
-    case 'openrouter': {
-      const apiKey = process.env.OPENROUTER_API_KEY?.trim();
-      if (!apiKey) {
-        throw new LlmError(
-          503,
-          isEn() ? 'OPENROUTER_API_KEY is not configured on the server.' : '伺服器尚未設定 OPENROUTER_API_KEY，請設定環境變數後再使用 OpenRouter。'
-        );
-      }
-      return runOpenAiCompatibleChat({
-        provider: 'openrouter',
-        providerLabel: 'OpenRouter',
-        baseUrl: getSafeCloudBaseUrl('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
-        apiKey,
-        model,
-        opts,
-        extraHeaders: { 'X-Title': 'BIIBO Personal Tutor' },
-      });
-    }
   }
 }
 
-export async function testEngineConnection(provider: ModelProvider, model: string): Promise<{ ok: boolean; latency_ms: number; preview: string }> {
+export async function testEngineConnection(provider: ModelProvider, model: string, cloudKey?: string, cliOptions?: CliOptions): Promise<{ ok: boolean; latency_ms: number; preview: string }> {
   const started = Date.now();
   const res = await runChatCompletion({
     provider,
@@ -1109,9 +1190,11 @@ export async function testEngineConnection(provider: ModelProvider, model: strin
       { role: 'system', content: 'Reply with a single word: OK' },
       { role: 'user', content: 'ping' },
     ],
-    maxTokens: 16,
+    maxTokens: 128,
     temperature: 0,
-    timeoutMs: 20_000,
+    timeoutMs: getEngineDescriptor(provider).group === 'cli' ? 65_000 : 25_000,
+    cloudKey,
+    cliOptions,
   });
   return {
     ok: true,

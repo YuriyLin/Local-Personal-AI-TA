@@ -257,6 +257,15 @@ function showTurns() {
       }
       tutorBox.append(detail);
     }
+    if (turn.retrieved_evidence?.length) {
+      const detail = element("details");
+      detail.append(element("summary", english() ? "View retrieved excerpts" : "查看檢索段落"));
+      for (const c of turn.retrieved_evidence) {
+        const location = c.page ? `${c.source_name} · ${pageLabel(c.page)}` : c.document_name;
+        detail.append(button(location, () => openDocument(c.document_id, c)), element("blockquote", c.excerpt));
+      }
+      tutorBox.append(detail);
+    }
     if (turn.status !== "imported") tutorBox.append(element("div",
       [tr(modes[turn.mode]), turn.retriever, turn.latency_ms == null ? "" : (turn.latency_ms / 1000).toFixed(2) + (english() ? " s" : " 秒")].filter(Boolean).join(" · "), "meta"));
     if (turn.warning) tutorBox.append(element("p", tr(turn.warning), "alert"));
@@ -418,6 +427,36 @@ function updateMaterialFileLabel() {
   else meta.textContent = `${files[0].name} (+${files.length - 1})`;
 }
 
+const intakeTabs = ["material", "syllabus"];
+
+function selectIntakeTab(panel, focus = false) {
+  for (const item of intakeTabs) {
+    const active = item === panel;
+    const tab = $(`intake-${item}-tab`);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(`intake-${item}`).hidden = !active;
+    if (active && focus) tab.focus();
+  }
+}
+
+function showIntakeDialog(panel) {
+  selectIntakeTab(panel);
+  if (!$("import-dialog").open) $("import-dialog").showModal();
+  $(`intake-${panel}-tab`).focus();
+}
+
+for (const [index, item] of intakeTabs.entries()) {
+  const tab = $(`intake-${item}-tab`);
+  tab.addEventListener("click", () => selectIntakeTab(item));
+  tab.addEventListener("keydown", event => {
+    const next = { Home: 0, End: intakeTabs.length - 1, ArrowLeft: 1 - index, ArrowRight: 1 - index }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    selectIntakeTab(intakeTabs[next], true);
+  });
+}
+
 function openImportDialog(kind = "", preselectedFolderId = "") {
   importKindContext = kind || "";
   $("import-form").reset();
@@ -436,7 +475,6 @@ function openImportDialog(kind = "", preselectedFolderId = "") {
       : "";
   }
   const fileInput = $("material-file");
-  const titleEl = $("import-title");
   const officialWrap = $("import-official-wrap");
   const originalLabel = $("import-original-label");
   if (officialWrap) officialWrap.hidden = kind === "personal";
@@ -445,16 +483,13 @@ function openImportDialog(kind = "", preselectedFolderId = "") {
   }
   if (kind === "pdf") {
     fileInput.accept = ".pdf";
-    titleEl.textContent = tr("匯入原始 PDF");
     $("original").value = "";
   } else if (kind === "personal") {
     fileInput.accept = ".md,.txt";
-    titleEl.textContent = tr("匯入個人文檔");
     $("original").value = "";
     $("official").checked = false;
   } else if (kind === "note") {
     fileInput.accept = ".md,.txt";
-    titleEl.textContent = tr("匯入課程筆記");
     const pdfs = state.documents.filter(d => d.kind === "pdf");
     const activePdf = window.reader?.doc?.kind === "pdf"
       ? window.reader.doc.id
@@ -466,18 +501,15 @@ function openImportDialog(kind = "", preselectedFolderId = "") {
     }
   } else if (kind === "text") {
     fileInput.accept = ".md,.txt";
-    titleEl.textContent = tr("匯入文字教材");
     $("original").value = "";
   } else if (kind === "course") {
     fileInput.accept = ".pdf,.md,.txt";
-    titleEl.textContent = tr("匯入課程教材");
     $("original").value = "";
   } else {
     fileInput.accept = ".pdf,.md,.txt";
-    titleEl.textContent = tr("匯入教材");
   }
   updateMaterialFileLabel();
-  $("import-dialog").showModal();
+  showIntakeDialog("material");
 }
 
 document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click",() => b.closest("dialog").close()));
@@ -554,7 +586,7 @@ bindForm("import-form",async () => {
   importKindContext = "";
   $("import-form").reset();
   $("preview").hidden = true;
-  $("import-dialog").close();
+  if (!$("intake-material").hidden) $("import-dialog").close();
 },"import-status","匯入教材失敗，請確認檔案格式為 PDF、Markdown 或 TXT 後再試。");
 
 function findEngine(providerId) {
@@ -591,8 +623,10 @@ function renderModelBadge() {
     badge.dataset.state = "checking";
     text.textContent = tr("偵測模型中…");
   } else if (state.modelOnline) {
-    badge.dataset.state = "online";
-    text.textContent = `${label} · ${tr("已就緒")}`;
+    const group = findEngine(state.provider)?.group;
+    badge.dataset.state = group === "cli" || group === "cloud" ? "untested" : "online";
+    const status = group === "cli" ? "已偵測 CLI" : group === "cloud" ? "已設定金鑰" : "已就緒";
+    text.textContent = `${label} · ${tr(status)}`;
   } else {
     badge.dataset.state = "offline";
     text.textContent = `${label} · ${tr("未就緒")}`;
@@ -637,6 +671,46 @@ function syncCustomModelField() {
   }
 }
 
+let cloudKeyProvider = "";
+let savedCliOptions = {};
+let draftCliOptions = {};
+
+function draftCloudKey(provider) {
+  return provider === cloudKeyProvider ? $("cloud-key").value.trim() : "";
+}
+
+function readDraftCliOptions() {
+  if (findEngine(state.draftProvider)?.group !== "cli") return undefined;
+  const options = {};
+  if ($("cli-reasoning").value) options.reasoning_effort = $("cli-reasoning").value;
+  if (state.draftProvider === "codex-cli" && $("cli-service-tier").value) {
+    options.service_tier = $("cli-service-tier").value;
+  }
+  return options;
+}
+
+function syncCliOptions() {
+  const provider = state.draftProvider;
+  const eng = findEngine(provider);
+  const cli = eng?.group === "cli";
+  $("cli-options").hidden = !cli;
+  $("cli-service-tier-wrap").hidden = provider !== "codex-cli";
+  if (!cli) return;
+
+  const model = getSelectedModelValue();
+  const catalog = eng.model_capabilities || {};
+  const capabilities = Object.hasOwn(catalog, model) ? catalog[model] : undefined;
+  const levels = capabilities?.reasoning_levels ?? eng.reasoning_levels ?? [];
+  const saved = draftCliOptions[provider] || {};
+  const effort = $("cli-reasoning");
+  effort.replaceChildren(new Option(tr("沿用 CLI 設定"), ""), ...levels.map(level => new Option(level, level)));
+  effort.value = levels.includes(saved.reasoning_effort) ? saved.reasoning_effort : "";
+  const tier = $("cli-service-tier");
+  const fast = tier.querySelector('option[value="fast"]');
+  fast.disabled = capabilities?.fast === false;
+  tier.value = !fast.disabled || saved.service_tier !== "fast" ? saved.service_tier || "" : "";
+}
+
 function populateModelsForProvider(providerId, preferredModel = "") {
   const select = $("model");
   const customInput = $("custom-model");
@@ -644,13 +718,29 @@ function populateModelsForProvider(providerId, preferredModel = "") {
   if (!select) return;
 
   const eng = findEngine(providerId);
+  const cloud = eng?.group === "cloud";
+  const keyInput = $("cloud-key");
+  if (cloudKeyProvider !== providerId || !cloud) keyInput.value = "";
+  cloudKeyProvider = cloud ? providerId : "";
+  $("cloud-key-wrap").hidden = !cloud;
+  keyInput.placeholder = tr(eng?.available ? "已設定金鑰，留空沿用" : "輸入所選服務的金鑰");
+  $("load-provider-models").hidden = !cloud && providerId !== "antigravity-cli";
   const models = eng ? [...eng.models] : [];
-  const defaultModel = preferredModel || (providerId === state.provider ? state.modelName : "") || eng?.default_model || "";
+  let defaultModel = preferredModel || (providerId === state.provider ? state.modelName : "") || eng?.default_model || "";
+  if (providerId === "antigravity-cli") {
+    const legacy = /-(low|medium|high|xhigh|max)$/.exec(defaultModel);
+    if (legacy && models.includes(defaultModel.slice(0, legacy.index))) {
+      draftCliOptions[providerId] ??= { reasoning_effort: legacy[1] };
+      defaultModel = defaultModel.slice(0, legacy.index);
+    }
+  }
 
   const isCustomValue = Boolean(defaultModel && !models.includes(defaultModel));
   const list = isCustomValue && !eng?.allow_custom_model ? [defaultModel, ...models] : models;
 
-  select.replaceChildren(...list.map(name => new Option(name, name)));
+  select.replaceChildren(...list.map(name => new Option(
+    name === "default" && eng?.group === "cli" ? tr("使用 CLI 預設模型") : name, name
+  )));
   if (eng?.allow_custom_model) {
     select.add(new Option(english() ? "Custom model…" : "自訂模型名稱…", "__custom__"));
   }
@@ -664,23 +754,24 @@ function populateModelsForProvider(providerId, preferredModel = "") {
   }
 
   syncCustomModelField();
+  syncCliOptions();
   syncAllCustomSelects();
 
   if (hint && eng) {
     if (eng.group === "cloud") {
       hint.textContent = eng.available
         ? (english()
-          ? `${eng.description} — Server key (${eng.env_var}) is ready.`
-          : `${eng.description_zh}（已讀取伺服器環境變數 ${eng.env_var}，可直接連線使用）`)
+          ? `${eng.description} — Key configured. Test the model before use.`
+          : `${eng.description_zh}。已設定金鑰，可測試模型連線。`)
         : (english()
-          ? `${eng.description} — Configure ${eng.env_var} in server environment variables (.env / Secrets) to enable.`
-          : `${eng.description_zh}。請於伺服器環境變數或 .env 設定 ${eng.env_var} 後啟用。`);
+          ? `${eng.description} — Enter a provider key or set ${eng.env_var} in .env.`
+          : `${eng.description_zh}。可在這裡輸入金鑰，或在 .env 設定 ${eng.env_var}。`);
     } else if (eng.group === "cli") {
       const bins = (eng.cli_binaries || []).join(" / ");
       hint.textContent = eng.available
         ? (english()
-          ? `${eng.description} — Detected "${eng.detected_binary}" on local PATH.`
-          : `${eng.description_zh}（已偵測本機指令 ${eng.detected_binary}）`)
+          ? `${eng.description} — Detected ${eng.detected_binary}. Model access depends on your CLI login.`
+          : `${eng.description_zh}。已偵測 ${eng.detected_binary}，請測試確認帳號能使用所選模型。`)
         : (english()
           ? `${eng.description} — Install local CLI (${bins}) and ensure it is on PATH.`
           : `${eng.description_zh}。請於本機安裝指令（${bins}）並加入 PATH 後點擊重新偵測。`);
@@ -757,6 +848,7 @@ async function loadPreferences() {
   state.provider = p.provider || "ollama";
   state.draftProvider = state.provider;
   state.modelName = p.model;
+  savedCliOptions = p.cli_options || {};
   $("mode").value = $("preferred-mode").value = p.mode;
   $("model").replaceChildren(new Option(p.model, p.model));
   $("retriever").value = p.retriever;
@@ -776,7 +868,7 @@ async function detectModels(preserveSelection = false) {
   const initialModel = preserveSelection ? getSelectedModelValue() : state.modelName;
 
   try {
-    const data = await get("/api/engines");
+    const data = await get(preserveSelection ? "/api/engines?refresh=1" : "/api/engines");
     if (seq !== detectRequestSeq) return;
     state.engines = Array.isArray(data?.engines) ? data.engines : [];
     const activeEng = findEngine(state.provider);
@@ -821,13 +913,48 @@ for (const tab of document.querySelectorAll(".engine-group-tab")) {
   });
 }
 
-$("model")?.addEventListener("change", syncCustomModelField);
+$("model")?.addEventListener("change", () => {
+  syncCustomModelField();
+  syncCliOptions();
+  syncAllCustomSelects();
+});
+$("custom-model").addEventListener("input", () => {
+  syncCliOptions();
+  syncAllCustomSelects();
+});
+$("cli-options").addEventListener("change", () => {
+  draftCliOptions[state.draftProvider] = readDraftCliOptions();
+});
+
+$("load-provider-models").addEventListener("click", async () => {
+  const btn = $("load-provider-models");
+  const provider = state.draftProvider;
+  const status = $("settings-status");
+  btn.disabled = true;
+  status.textContent = tr("正在取得模型清單…");
+  try {
+    const { models, model_capabilities } = await post("/api/engines/models", { provider, api_key: draftCloudKey(provider) });
+    if (provider !== state.draftProvider || !$("settings-dialog").open) return;
+    if (!models.length) throw Error(tr("無法取得模型清單。"));
+    const engine = findEngine(provider);
+    const current = getSelectedModelValue();
+    engine.models = models;
+    engine.model_capabilities = model_capabilities;
+    populateModelsForProvider(provider, provider === "antigravity-cli" || models.includes(current) ? current : models[0]);
+    status.textContent = english() ? `Loaded ${models.length} models.` : `已取得 ${models.length} 個模型。`;
+  } catch (error) {
+    if (provider === state.draftProvider) status.textContent = friendlyError(error, "無法取得模型清單。");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $("test-engine")?.addEventListener("click", async () => {
   const btn = $("test-engine");
   const status = $("settings-status");
   const provider = state.draftProvider || state.provider;
   const model = getSelectedModelValue();
+  const cliOptions = readDraftCliOptions();
   if (!model) {
     status.textContent = english() ? "Please select or enter a model name first." : "請先選擇或輸入模型名稱。";
     return;
@@ -837,20 +964,29 @@ $("test-engine")?.addEventListener("click", async () => {
     ? `Testing ${providerDisplayName(provider)} (${model})…`
     : `正在測試 ${providerDisplayName(provider)}（${model}）連線…`;
   try {
-    const res = await post("/api/engines/test", { provider, model });
+    const res = await post("/api/engines/test", { provider, model, api_key: draftCloudKey(provider), cli_options: cliOptions });
+    if (provider !== state.draftProvider || model !== getSelectedModelValue()) return;
     const secs = typeof res.latency_ms === "number" ? (res.latency_ms / 1000).toFixed(2) : "0";
     status.textContent = english()
       ? `Connected to ${providerDisplayName(provider)} (${model}) in ${secs}s.`
       : `連線成功！${providerDisplayName(provider)}（${model}）回應耗時 ${secs} 秒。`;
   } catch (error) {
-    status.textContent = friendlyError(error, "連線測試未通過，請確認引擎服務與設定。");
+    if (provider === state.draftProvider && model === getSelectedModelValue()) {
+      status.textContent = friendlyError(error, "連線測試未通過，請確認引擎服務與設定。");
+    }
   } finally {
     btn.disabled = false;
   }
 });
 
-$("settings-open").addEventListener("click", () => { $("settings-dialog").showModal(); detectModels(false); });
-$("model-status-badge")?.addEventListener("click", () => { $("settings-dialog").showModal(); detectModels(false); });
+function openSettings() {
+  draftCliOptions = { ...savedCliOptions };
+  $("settings-dialog").showModal();
+  detectModels(false);
+}
+$("settings-open").addEventListener("click", openSettings);
+$("settings-dialog").addEventListener("close", () => { $("cloud-key").value = ""; });
+$("model-status-badge")?.addEventListener("click", openSettings);
 $("refresh-models").onclick = () => detectModels(true);
 
 bindForm("settings-form", async () => {
@@ -860,18 +996,21 @@ bindForm("settings-form", async () => {
   if (!model) {
     throw Error(english() ? "Please enter a valid model name." : "請選擇或輸入有效的模型名稱。");
   }
-  await api("/api/settings", {
+  const saved = await parseJson(await api("/api/settings", {
     method: "PUT",
     ...json({
       mode,
       provider,
       model,
+      api_key: draftCloudKey(provider),
+      cli_options: readDraftCliOptions(),
       retriever: $("retriever").value,
       language: $("response-language").value
     })
-  });
+  }), "/api/settings");
   state.provider = provider;
   state.modelName = model;
+  savedCliOptions = saved.cli_options || {};
   $("mode").value = mode;
   $("settings-dialog").close();
   checkModelStatus();
@@ -882,6 +1021,7 @@ function resetRecordsDeleteConfirm() {
   window.clearTimeout(recordsDeleteConfirmTimer);
   const btn = $("records-delete");
   if (!btn) return;
+  if (btn.dataset.confirm) $("records-status").textContent = "";
   btn.dataset.confirm = "";
   btn.classList.remove("is-confirming");
   btn.textContent = tr("批量刪除");
@@ -895,62 +1035,136 @@ function selectedRecordItems() {
   return selection;
 }
 
+let recordPreviewRequest = 0;
+let recordsBusy = false;
+const recordsMedia = matchMedia("(max-width: 620px)");
+
 function updateRecordSelectionUI() {
   resetRecordsDeleteConfirm();
   const boxes = [...$("record-list").querySelectorAll("input[type='checkbox']")];
   const checkedCount = boxes.filter(b => b.checked).length;
   const selectAll = $("record-select-all");
-  if (selectAll) {
-    selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
-    selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
-  }
-  const counter = $("record-selected-count");
-  if (counter) {
-    counter.textContent = english() ? `${checkedCount} selected` : `已選 ${checkedCount} 筆`;
-  }
-  const delBtn = $("records-delete");
-  if (delBtn) delBtn.disabled = checkedCount === 0;
-  const exportBtn = $("records-export-btn");
-  if (exportBtn) exportBtn.disabled = boxes.length === 0;
+  selectAll.disabled = !boxes.length || recordsBusy;
+  selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
+  selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+  $("record-selected-count").textContent = english() ? `${checkedCount} selected` : `已選 ${checkedCount} 筆`;
+  $("records-delete").disabled = !checkedCount || recordsBusy;
+  $("records-export-btn").disabled = !checkedCount || recordsBusy;
 }
 
+function recordDate(created) {
+  if (!created) return null;
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(created) ? created.replace(" ", "T") + "Z" : created;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  const locale = english() ? "en" : "zh-TW";
+  return { iso: date.toISOString(), label: new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium", timeStyle: "short",
+  }).format(date), compact: new Intl.DateTimeFormat(locale, {
+    month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(date) };
+}
+
+function showRecordMessage(text) {
+  $("record-view").replaceChildren(element("p", text, "record-view-message"));
+}
+
+function clearRecordPreview() {
+  recordPreviewRequest++;
+  $("records-dialog").querySelector(".records-grid").dataset.view = "list";
+  $("record-preview-head").hidden = true;
+  $("record-preview-title").textContent = tr("對話預覽");
+  showRecordMessage(tr("點擊左側任一對話即可預覽完整問答"));
+}
+
+function previewMessage(role, html, text, kind) {
+  const message = element("section", undefined, `record-message record-message-${kind}`);
+  const body = element("div", undefined, "record-message-body");
+  if (typeof html === "string") body.innerHTML = html;
+  else body.textContent = text || "";
+  message.append(element("h4", role), body);
+  return message;
+}
+
+async function previewRecord(item, kind, trigger) {
+  const request = ++recordPreviewRequest;
+  for (const old of $("record-list").querySelectorAll("[aria-current]")) old.removeAttribute("aria-current");
+  trigger.setAttribute("aria-current", "true");
+  $("records-dialog").querySelector(".records-grid").dataset.view = "preview";
+  $("record-preview-head").hidden = false;
+  $("record-preview-title").textContent = item.title || item.name;
+  const date = recordDate(item.created);
+  const time = $("record-preview-time");
+  time.hidden = !date;
+  time.dateTime = date?.iso || "";
+  time.textContent = date?.label || "";
+  if (recordsMedia.matches) $("record-back").focus();
+  showRecordMessage(tr("正在載入對話…"));
+  const view = $("record-view");
+  view.scrollTop = 0;
+  try {
+    const result = await get(`/api/${kind}/${encodeURIComponent(item.id)}`);
+    if (request !== recordPreviewRequest) return;
+    if (kind === "records") {
+      view.replaceChildren(previewMessage(tr("匯入紀錄"), result.html, result.content, "tutor"));
+    } else if (result.length) {
+      view.replaceChildren(...result.flatMap(turn => [
+        previewMessage(tr("你"), turn.question_html, turn.question, "you"),
+        previewMessage(tr("BIIBO 助教"), turn.html, turn.answer, "tutor"),
+      ]));
+    } else {
+      showRecordMessage(tr("這筆對話尚無問答。"));
+    }
+    math(view);
+  } catch (error) {
+    if (request === recordPreviewRequest) showRecordMessage(friendlyError(error, tr("無法載入對話預覽。")));
+  }
+}
+
+$("record-back").addEventListener("click", () => {
+  $("records-dialog").querySelector(".records-grid").dataset.view = "list";
+  $("record-list").querySelector('[aria-current="true"]')?.focus();
+});
+$("records-dialog").addEventListener("close", clearRecordPreview);
+
 async function listRecords() {
+  const list = $("record-list");
   state.records = await get("/api/records");
   await refreshChats();
-  resetRecordsDeleteConfirm();
   $("records-status").textContent = "";
-  $("record-list").replaceChildren();
-  $("record-view").hidden = true;
-  const items = [[state.chats,"conversations"],[state.records,"records"]];
-  let total = 0;
-  for (const [rows,kind] of items) for (const r of rows) {
-    total++;
+  list.replaceChildren();
+  clearRecordPreview();
+  const items = [[state.chats, "conversations"], [state.records, "records"]];
+  for (const [rows, kind] of items) for (const item of rows) {
+    const title = item.name || item.title;
     const box = element("input");
     box.type = "checkbox";
-    box.id = "record-" + r.id;
     box.dataset.kind = kind;
-    box.value = r.id;
+    box.value = item.id;
+    box.setAttribute("aria-label", `${tr("選取對話")} · ${title}`);
     box.addEventListener("change", updateRecordSelectionUI);
-    const label = element("label", undefined, "record-item-label");
-    label.htmlFor = box.id;
-    label.append(element("span", r.name || r.title, "record-item-title"));
-    if (kind === "conversations" && typeof r.turn_count === "number") {
-      const metaText = english() ? `${r.turn_count} turns` : `${r.turn_count} 則`;
-      label.append(element("span", metaText, "record-item-meta"));
-    }
+    const trigger = element("button", undefined, "record-item-preview");
+    trigger.type = "button";
+    const text = element("span", undefined, "record-item-text");
+    const titleLine = element("span", title, "record-item-title");
+    titleLine.title = title;
+    text.append(titleLine);
+    const source = kind === "records" ? tr("匯入紀錄") : item.source_name || tr("未指定教材");
+    const turns = kind === "conversations" ? (english() ? `${item.turn_count} turns` : `${item.turn_count} 則`) : "";
+    const date = recordDate(item.created);
+    const metaLine = element("span", undefined, "record-item-meta");
+    metaLine.title = [source, date?.label, turns].filter(Boolean).join(" · ");
+    metaLine.append(element("span", source, "record-item-source"));
+    const details = [date?.compact, turns].filter(Boolean).join(" · ");
+    if (details) metaLine.append(element("span", "· " + details, "record-item-detail"));
+    text.append(metaLine);
+    trigger.append(text);
+    trigger.addEventListener("click", () => previewRecord(item, kind, trigger));
     const line = element("div", undefined, "record-item-row");
-    line.append(box, label, button(tr("預覽"), async () => {
-      const result = await get("/api/" + kind + "/" + r.id);
-      $("record-view").textContent = kind === "records"
-        ? result.content
-        : result.map(t => tr("你") + ": " + t.question + "\n" + tr("助教") + ": " + t.answer).join("\n\n");
-      $("record-view").hidden = false;
-    }));
-    $("record-list").append(line);
+    line.append(box, trigger);
+    list.append(line);
   }
-  const bar = $("records-bar");
-  if (bar) bar.hidden = total === 0;
-  if (!total) $("record-list").append(element("p", tr("目前沒有對話紀錄。"), "small"));
+  if (!list.childElementCount) list.append(element("p", tr("目前沒有對話紀錄。"), "record-view-message"));
   updateRecordSelectionUI();
 }
 $("record-select-all")?.addEventListener("change", () => {
@@ -980,7 +1194,8 @@ $("records-delete")?.addEventListener("click", async () => {
     return;
   }
   resetRecordsDeleteConfirm();
-  btn.disabled = true;
+  recordsBusy = true;
+  updateRecordSelectionUI();
   try {
     const activeDeleted = state.conversation && selection.conversations.includes(state.conversation);
     const res = await post("/api/records/delete", selection);
@@ -996,20 +1211,32 @@ $("records-delete")?.addEventListener("click", async () => {
   } catch (error) {
     $("records-status").textContent = friendlyError(error, "無法刪除所選對話，請稍後再試。");
   } finally {
+    recordsBusy = false;
     updateRecordSelectionUI();
   }
 });
-bindForm("records-export", async () => {
+$("records-export").addEventListener("submit", async event => {
+  event.preventDefault();
   const selection = { ...selectedRecordItems(), format: $("format").value };
-  if (!selection.conversations.length && !selection.records.length) throw Error("請勾選至少一筆對話。");
-  const response = await api("/api/records/export", { method: "POST", ...json(selection) });
-  const url = URL.createObjectURL(await response.blob());
-  const link = element("a");
-  link.download = "aita-records." + selection.format;
-  link.href = url;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}, "records-status", "無法匯出互動紀錄，請稍後再試。");
+  if (recordsBusy || (!selection.conversations.length && !selection.records.length)) return;
+  recordsBusy = true;
+  updateRecordSelectionUI();
+  $("records-status").textContent = "";
+  try {
+    const response = await api("/api/records/export", { method: "POST", ...json(selection) });
+    const url = URL.createObjectURL(await response.blob());
+    const link = element("a");
+    link.download = "aita-records." + selection.format;
+    link.href = url;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    $("records-status").textContent = friendlyError(error, "無法匯出互動紀錄，請稍後再試。");
+  } finally {
+    recordsBusy = false;
+    updateRecordSelectionUI();
+  }
+});
 document.addEventListener("aita-language", () => {
   refreshJobs().catch(report);
   refreshChats().catch(report);
@@ -1166,4 +1393,4 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && openSelectCloser) openSelectCloser();
 });
 
-for (const select of document.querySelectorAll("select")) enhanceBrandSelect(select);
+for (const select of document.querySelectorAll("select:not(#format)")) enhanceBrandSelect(select);

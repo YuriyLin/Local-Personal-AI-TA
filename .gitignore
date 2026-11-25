@@ -28,6 +28,7 @@ Desktop.ini
 *.log
 
 # Local course materials, application state and submission artifacts
+/data/
 /aita/data/
 /aita/FINAL-REPORT.md
 /AI_Tutor_Lab_Starter_English/

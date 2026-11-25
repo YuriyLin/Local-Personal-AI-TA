@@ -4,12 +4,16 @@ import path from 'node:path';
 import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import { ingestDocument, MAX_UPLOAD } from './src/ingest.js';
+import { migrateLegacyStore } from './src/migrate.js';
 import { renderMarkdown } from './src/markdown.js';
 import { animateMascotAssets, getMascotStatus } from './src/mascot.js';
-import { nextSeq, loadStore, persistStoreNow, Preferences, pruneInactiveDocuments, pruneOldJobs, schedulePersist, store } from './src/store.js';
+import { isCliProvider, nextSeq, loadStore, persistStoreNow, Preferences, pruneInactiveDocuments, pruneOldJobs, readCliOptions, schedulePersist, store } from './src/store.js';
+import type { CoursePlanRecord, RecordEntry } from './src/store.js';
 import {
+  archiveCourseMaterials,
   DraftStyle,
   ensureFolderForWeek,
+  extractSyllabusSource,
   generateDocumentQuiz,
   generateNoteDraft,
   generateSyllabusPlan,
@@ -18,45 +22,78 @@ import {
   StudyHttpError,
 } from './src/study.js';
 import {
+  discoverCliModels,
   discoverEngines,
   getEngineDescriptor,
   isSafeModelName,
   isValidProvider,
+  listProviderModels,
   LlmError,
+  parseCloudKey,
   probeLmStudioModels,
   probeOllamaModels,
   runChatCompletion,
+  saveCloudKey,
   testEngineConnection,
 } from './src/llm.js';
-import { evidenceRows, generateAnswer, policyQuestion, retrieve, searchQuery } from './src/tutor.js';
+import { evidenceRows, expandPageEvidence, generateAnswer, policyQuestion, retrieve, searchQuery } from './src/tutor.js';
 
 const ROOT = process.cwd();
 const WEB_DIR = path.join(ROOT, 'aita', 'web');
 const KATEX_DIR = path.join(ROOT, 'node_modules', 'katex', 'dist');
 const PDFJS_DIR = path.join(ROOT, 'node_modules', 'pdfjs-dist');
 
-const app = express();
-app.use(express.json({ limit: '5mb' }));
-
-app.use((_req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  next();
-});
-
-// Optional Bearer token protection when BIIBO_ACCESS_TOKEN is configured.
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '127.0.0.1';
 const API_ACCESS_TOKEN = process.env.BIIBO_ACCESS_TOKEN?.trim() || '';
-app.use('/api', (req, res, next) => {
-  if (!API_ACCESS_TOKEN) return next();
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  const expected = Buffer.from(API_ACCESS_TOKEN, 'utf-8');
-  const actual = Buffer.from(token, 'utf-8');
-  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
-    res.status(401).json({ detail: '未授權的存取請求。' });
+const publicOrigin = process.env.BIIBO_PUBLIC_ORIGIN ? new URL(process.env.BIIBO_PUBLIC_ORIGIN) : null;
+const loopbackHosts = ['127.0.0.1', 'localhost', '::1'];
+if (publicOrigin && (publicOrigin.protocol !== 'https:' || publicOrigin.origin !== publicOrigin.href.replace(/\/$/, ''))) {
+  throw new Error('BIIBO_PUBLIC_ORIGIN must be an HTTPS origin without a path.');
+}
+if (!loopbackHosts.includes(HOST) && (!API_ACCESS_TOKEN || !publicOrigin)) {
+  throw new Error('Non-loopback binding requires BIIBO_ACCESS_TOKEN and BIIBO_PUBLIC_ORIGIN. Use an HTTPS reverse proxy.');
+}
+const localOrigins = new Set(loopbackHosts.map((host) => new URL(`http://${host === '::1' ? '[::1]' : host}:${PORT}`).origin));
+const origins = publicOrigin ? new Set([publicOrigin.origin]) : localOrigins;
+const allowedHosts = new Set([...origins].map((origin) => new URL(origin).host));
+
+const app = express();
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!allowedHosts.has(req.get('host')?.toLowerCase() || '')) {
+    res.sendStatus(403);
     return;
   }
   next();
 });
+
+const expectedToken = Buffer.from(API_ACCESS_TOKEN, 'utf-8');
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && !origins.has(origin)) {
+    res.sendStatus(403);
+    return;
+  }
+  if (!API_ACCESS_TOKEN) {
+    next();
+    return;
+  }
+  // Browser HTTP auth also covers PDF.js, image URLs and links opened in a new tab.
+  const [scheme, credential = ''] = (req.get('authorization') || '').split(' ', 2);
+  const basic = scheme.toLowerCase() === 'basic' ? Buffer.from(credential, 'base64').toString('utf-8') : '';
+  const token = scheme.toLowerCase() === 'bearer' ? credential : basic.startsWith('biibo:') ? basic.slice(6) : '';
+  const actual = Buffer.from(token, 'utf-8');
+  if (actual.length === expectedToken.length && crypto.timingSafeEqual(actual, expectedToken)) {
+    res.setHeader('Cache-Control', 'private, no-store');
+    next();
+    return;
+  }
+  res.setHeader('WWW-Authenticate', 'Basic realm="BIIBO", charset="UTF-8"');
+  res.status(401).json({ detail: '未授權的存取請求。' });
+});
+app.use(express.json({ limit: '5mb' }));
 
 // Static assets matching original FastAPI mounts
 app.use('/static', express.static(WEB_DIR));
@@ -89,6 +126,13 @@ function getUploadBytes(file?: Express.Multer.File): Buffer {
 
 let parsingChain = Promise.resolve();
 const activeAskKeys = new Set<string>();
+const jobPending = (job: {state: string}) => job.state === 'queued' || job.state === 'processing';
+
+function requireImportCapacity(): void {
+  if ([...store.jobs.values()].filter(jobPending).length >= 30) {
+    throw httpError(429, '匯入佇列已滿。請等待部分工作完成後再重試。');
+  }
+}
 
 async function summarizeDocument(documentId: string): Promise<void> {
   const doc = store.documents.get(documentId);
@@ -102,9 +146,10 @@ async function summarizeDocument(documentId: string): Promise<void> {
     .join('\n')
     .slice(0, 1600);
 
-  if (preview.replace(/\W/g, '').length < 25) return;
+  if (preview.replace(/[^\p{L}\p{N}]/gu, '').length < 25) return;
 
   const prefs = store.settings;
+  if (prefs.provider !== 'ollama' && prefs.provider !== 'lmstudio') return;
   const language = prefs.language === 'en' ? 'English' : 'Traditional Chinese';
   try {
     const completion = await runChatCompletion({
@@ -112,7 +157,7 @@ async function summarizeDocument(documentId: string): Promise<void> {
       model: prefs.model,
       maxTokens: 140,
       temperature: 0,
-      timeoutMs: prefs.provider === 'ollama' || prefs.provider === 'lmstudio' ? 4000 : 15000,
+      timeoutMs: 4000,
       messages: [
         {
           role: 'system',
@@ -195,6 +240,7 @@ function enqueueJob(jobId: string, bundle: Buffer | null): void {
         job.state = 'ready';
         job.payload = null;
         job.message = `匯入完成 · ${((performance.now() - start) / 1000).toFixed(2)} 秒`;
+        pruneOldJobs();
         schedulePersist();
       }
     }
@@ -243,6 +289,7 @@ app.post(
 
     const data = getUploadBytes(file);
     const parsedBundle = bundle ? getUploadBytes(bundle) : null;
+    requireImportCapacity();
     const id = uuidHex();
     store.jobs.set(id, {
       id,
@@ -264,8 +311,7 @@ app.post(
 
 app.get('/api/jobs', (_req, res) => {
   const list = [...store.jobs.values()]
-    .sort((a, b) => b.seq - a.seq)
-    .slice(0, 30)
+    .sort((a, b) => Number(jobPending(b)) - Number(jobPending(a)) || b.seq - a.seq)
     .map(({ id, name, state, message, document_id }) => ({ id, name, state, message, document_id }));
   res.json(list);
 });
@@ -276,6 +322,8 @@ app.post('/api/jobs/:key/retry', upload.single('bundle'), (req, res) => {
   if (!job || job.state !== 'failed') {
     throw httpError(409, '只有失敗的匯入可以重試。');
   }
+  if (!job.payload) throw httpError(409, '原始檔案已釋放，請重新選擇檔案匯入。');
+  requireImportCapacity();
   const parsedBundle = req.file ? getUploadBytes(req.file) : null;
   job.state = 'queued';
   job.message = null;
@@ -300,6 +348,9 @@ app.get('/api/documents', (_req, res) => {
     .map((d) => {
       const info = store.documentInfo.get(d.id);
       const noteMeta = noteByDoc.get(d.id);
+      const notePages = d.kind === 'personal' && d.original_id
+        ? [...new Set([...d.markdown.matchAll(/^<!--\s*page:\s*(\d+)\s*-->$/gm)].map(match => Number(match[1])))]
+        : [];
       let pages: number | null = null;
       if (d.kind === 'pdf') {
         for (const b of d.blocks) {
@@ -318,6 +369,7 @@ app.get('/api/documents', (_req, res) => {
         note_id: noteMeta?.id ?? null,
         pinned: noteMeta?.pinned ?? false,
         note_role: noteMeta?.role ?? null,
+        note_page: notePages.length === 1 ? notePages[0] : null,
         preview: (d.blocks[0]?.text || '').slice(0, 400),
         pages,
       };
@@ -327,18 +379,21 @@ app.get('/api/documents', (_req, res) => {
 });
 
 app.get('/api/folders', (_req, res) => {
-  const list = [...store.folders.values()].sort(
-    (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id)
-  );
+  const byName = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+  const list = [...store.folders.values()].sort((a, b) => byName.compare(a.name, b.name) || a.id.localeCompare(b.id));
   res.json(list);
 });
 
-app.post('/api/folders', (req, res) => {
-  const rawName = typeof req.body?.name === 'string' ? req.body.name : '';
-  const name = rawName.trim();
+function validatedFolderName(value: unknown): string {
+  const name = typeof value === 'string' ? value.trim() : '';
   if (!name || name.length > 80) {
     throw httpError(422, '請輸入分類名稱。');
   }
+  return name;
+}
+
+app.post('/api/folders', (req, res) => {
+  const name = validatedFolderName(req.body?.name);
   const parentId = typeof req.body?.parent_id === 'string' && req.body.parent_id ? req.body.parent_id : null;
   if (parentId && !store.folders.has(parentId)) {
     throw httpError(404, '找不到資料。');
@@ -348,6 +403,127 @@ app.post('/api/folders', (req, res) => {
   store.folders.set(id, folder);
   schedulePersist();
   res.status(201).json(folder);
+});
+
+async function updateOverview(plan: CoursePlanRecord, next: CoursePlanRecord, weekNumber?: number) {
+  if (!plan.overview_note_id) return;
+  const note = store.personalNotes.get(plan.overview_note_id);
+  const doc = note && store.documents.get(note.document_id);
+  if (!note || !doc) throw httpError(409, '找不到課程總覽筆記，請先確認筆記。');
+  let markdown = doc.markdown;
+  if (weekNumber !== undefined) {
+    const week = next.weeks.find(item => item.week_number === weekNumber)!;
+    const labels: Record<string, [string, string]> = {
+      lecture: ['課程', 'Lecture'], holiday: ['放假', 'Holiday'],
+      exam: ['考試', 'Exam'], activity: ['評量／活動', 'Activity'],
+    };
+    let matches = 0;
+    markdown = markdown.replace(/^(\|[^\n]+\|)\s*$/gm, (line) => {
+      const cells = line.slice(1, line.lastIndexOf('|')).split('|');
+      const key = cells[0]?.trim();
+      if (cells.length < 5 || !new RegExp(`^(?:week\\s*${weekNumber}|第\\s*${weekNumber}\\s*[週周])$`, 'i').test(key)) return line;
+      matches++;
+      const oldType = cells[1].trim();
+      const isEnglish = /^[A-Za-z]/.test(oldType);
+      cells[1] = ` ${labels[week.week_type][isEnglish ? 1 : 0]} `;
+      cells[2] = ` ${week.title.replace(/\|/g, '／')} `;
+      return `|${cells.join('|')}|`;
+    });
+    if (matches !== 1) throw httpError(409, '課程總覽中找不到唯一的週次資料列，請先確認筆記格式。');
+  }
+  if (plan.course_title !== next.course_title) {
+    const header = markdown.split('\n')[0];
+    if (header.startsWith('# ') && header.includes(plan.course_title)) {
+      markdown = markdown.replace(header, header.replace(plan.course_title, next.course_title));
+    }
+  }
+  const title = plan.course_title !== next.course_title && doc.name.includes(plan.course_title)
+    ? doc.name.replace(plan.course_title, next.course_title) : doc.name;
+  const id = await ingestDocument({ name: title, raw: Buffer.from(markdown), kind: 'personal', noteId: note.id });
+  if (note.document_id !== doc.id || doc.markdown !== store.documents.get(doc.id)?.markdown) {
+    throw httpError(409, '總覽筆記剛被修改，請重新整理後再試。');
+  }
+  if (id !== doc.id) {
+    doc.active = false;
+    const info = store.documentInfo.get(doc.id);
+    if (info && !store.documentInfo.has(id)) store.documentInfo.set(id, { ...info, document_id: id });
+    note.document_id = id;
+    next.overview_document_id = id;
+  }
+}
+
+app.patch('/api/folders/:key', async (req, res, nextError) => {
+ try {
+  const folder = store.folders.get(String(req.params.key));
+  if (!folder) throw httpError(404, '找不到分類。');
+  const body = (req.body || {}) as Record<string, unknown>;
+  const hasName = Object.hasOwn(body, 'name');
+  const hasParent = Object.hasOwn(body, 'parent_id');
+  if (!hasName && !hasParent) throw httpError(422, '請提供分類名稱或上層分類。');
+  const name = hasName ? validatedFolderName(body.name) : folder.name;
+  let parentId = folder.parent_id;
+  if (hasParent) {
+    const target = body.parent_id;
+    if (target !== null && (typeof target !== 'string' || !target)) throw httpError(422, '無效的上層分類。');
+    if (target !== null && !store.folders.has(target)) throw httpError(404, '找不到上層分類。');
+    const seen = new Set([folder.id]);
+    for (let ancestor = target; ancestor !== null; ancestor = store.folders.get(ancestor)?.parent_id ?? null) {
+      if (seen.has(ancestor)) throw httpError(422, '不能移入自己或下層分類。');
+      seen.add(ancestor);
+    }
+    parentId = target;
+  }
+  const related = [...store.coursePlans.values()].filter(plan =>
+    plan.root_folder_id === folder.id || plan.weeks.some(week => week.folder_id === folder.id));
+  if (hasName && name !== folder.name && related.length > 1) throw httpError(409, '此分類連結多門課程，請先確認課程分類。');
+  const plan = hasName ? related[0] : undefined;
+  if (plan && name !== folder.name) {
+    const revised = structuredClone(plan);
+    if (plan.root_folder_id === folder.id) revised.course_title = name;
+    const week = revised.weeks.find(item => item.folder_id === folder.id);
+    if (week) {
+      const prefix = name.match(/^(?:week\s*\d+|第\s*\d+\s*[週周])\s*[:：-]?\s*/i);
+      week.title = (prefix ? name.slice(prefix[0].length) : name).trim();
+      if (!week.title) throw httpError(422, '請輸入週次主題名稱。');
+      week.folder_name = name;
+    }
+    await updateOverview(plan, revised, week?.week_number);
+    Object.assign(plan, revised, { updated_at: new Date().toISOString() });
+  }
+  folder.parent_id = parentId;
+  if (hasName) {
+    folder.name = name;
+    for (const plan of store.coursePlans.values()) {
+      for (const week of plan.weeks) {
+        if (week.folder_id === folder.id) week.folder_name = name;
+      }
+    }
+  }
+  schedulePersist();
+  res.json(folder);
+ } catch (error) { nextError(error); }
+});
+
+app.delete('/api/folders/:key', (req, res) => {
+  const folder = store.folders.get(String(req.params.key));
+  if (!folder) throw httpError(404, '找不到分類。');
+  for (const child of store.folders.values()) {
+    if (child.parent_id === folder.id) child.parent_id = folder.parent_id;
+  }
+  for (const info of store.documentInfo.values()) {
+    if (info.folder_id === folder.id) info.folder_id = folder.parent_id;
+  }
+  for (const plan of store.coursePlans.values()) {
+    if (plan.root_folder_id === folder.id) plan.root_folder_id = null;
+    for (const week of plan.weeks) {
+      if (week.folder_id !== folder.id) continue;
+      week.folder_id = null;
+      week.folder_name = null;
+    }
+  }
+  store.folders.delete(folder.id);
+  schedulePersist();
+  res.json({ id: folder.id });
 });
 
 app.patch('/api/documents/:key/info', (req, res) => {
@@ -446,8 +622,8 @@ app.post('/api/notes', async (req, res, next) => {
       role: old?.role ?? 'general',
       manually_edited: true,
     });
-    if (store.coursePlan && store.coursePlan.overview_note_id === key) {
-      store.coursePlan.overview_document_id = docId;
+    for (const plan of store.coursePlans.values()) {
+      if (plan.overview_note_id === key) plan.overview_document_id = docId;
     }
     schedulePersist();
     res.json({
@@ -468,9 +644,10 @@ app.delete('/api/notes/:key', (req, res) => {
   const doc = store.documents.get(note.document_id);
   if (doc) doc.active = false;
   store.personalNotes.delete(key);
-  if (store.coursePlan && store.coursePlan.overview_note_id === key) {
-    store.coursePlan.overview_note_id = null;
-    store.coursePlan.overview_document_id = null;
+  for (const plan of store.coursePlans.values()) {
+    if (plan.overview_note_id !== key) continue;
+    plan.overview_note_id = null;
+    plan.overview_document_id = null;
   }
   pruneInactiveDocuments();
   schedulePersist();
@@ -540,9 +717,9 @@ app.get('/api/documents/:key/assets/*assetPath', (req, res) => {
 });
 
 // Multi-AI Model Engines & Settings
-app.get('/api/engines', async (_req, res, next) => {
+app.get('/api/engines', async (req, res, next) => {
   try {
-    const engines = await discoverEngines();
+    const engines = await discoverEngines(req.query.refresh === '1');
     res.json({
       engines,
       active: {
@@ -566,11 +743,24 @@ app.post('/api/engines/test', async (req, res, next) => {
     if (!isSafeModelName(model)) {
       throw httpError(422, '無效的模型名稱。');
     }
-    const result = await testEngineConnection(provider, model);
+    const options = body.cli_options === undefined ? undefined : readCliOptions(provider, body.cli_options);
+    if (options === null) throw httpError(422, '無效的 CLI 推理強度或 Fast 模式。');
+    const result = await testEngineConnection(provider, model, parseCloudKey(body.api_key), options);
     res.json(result);
   } catch (err) {
     next(err);
   }
+});
+
+app.post('/api/engines/models', async (req, res) => {
+  const provider = req.body?.provider;
+  if (!isValidProvider(provider)) throw httpError(422, '無效的模型引擎類型。');
+  if (provider === 'antigravity-cli' || provider === 'codex-cli') {
+    res.json(await discoverCliModels(provider, true));
+    return;
+  }
+  const models = await listProviderModels(provider, parseCloudKey(req.body?.api_key));
+  res.json({ models });
 });
 
 app.get('/api/models', async (req, res) => {
@@ -603,8 +793,7 @@ app.get('/api/models', async (req, res) => {
     return;
   }
 
-  const desc = getEngineDescriptor(provider);
-  res.json(desc.recommended_models);
+  res.json(provider === 'codex-cli' ? await listProviderModels(provider) : getEngineDescriptor(provider).recommended_models);
 });
 
 app.get('/api/settings', (_req, res) => {
@@ -635,7 +824,15 @@ app.put('/api/settings', (req, res) => {
     throw httpError(422, '無效的語言設定。');
   }
 
-  const next: Preferences = { mode, provider: providerInput, model, retriever, language };
+  const cliOptions = { ...store.settings.cli_options };
+  if (body.cli_options !== undefined) {
+    const options = readCliOptions(providerInput, body.cli_options);
+    if (!isCliProvider(providerInput) || !options) throw httpError(422, '無效的 CLI 推理強度或 Fast 模式。');
+    cliOptions[providerInput] = options;
+  }
+  const key = parseCloudKey(body.api_key);
+  if (key) saveCloudKey(providerInput, key);
+  const next: Preferences = { mode, provider: providerInput, model, retriever, language, cli_options: cliOptions };
   store.settings = next;
   schedulePersist();
   res.json(next);
@@ -658,18 +855,28 @@ function loadTurns(conversationId: string): Array<Record<string, unknown>> {
 
 app.get('/api/conversations', (_req, res) => {
   const turnCounts = new Map<string, number>();
+  const sources = new Map<string, string>();
   for (const t of store.turns) {
     turnCounts.set(t.conversation_id, (turnCounts.get(t.conversation_id) || 0) + 1);
+    const scope = t.result?.scope as { document_id?: string } | undefined;
+    const citation = Array.isArray(t.result?.citations) ? t.result.citations[0] : undefined;
+    const source = (scope?.document_id ? store.documents.get(scope.document_id)?.name : null)
+      || citation?.source_name || citation?.document_name;
+    if (typeof source === 'string' && source) sources.set(t.conversation_id, source);
   }
   const list = [...store.conversations.values()]
     .sort((a, b) => b.seq - a.seq)
-    .map(({ id, title, created }) => ({ id, title, created, turn_count: turnCounts.get(id) || 0 }));
+    .map(({ id, title, created }) => ({
+      id, title, created, source_name: sources.get(id) ?? null, turn_count: turnCounts.get(id) || 0,
+    }));
   res.json(list);
 });
 
 app.get('/api/conversations/:key', (req, res) => {
   const turns = loadTurns(String(req.params.key));
-  res.json(turns.map((t) => ({ ...t, html: renderMarkdown(String(t.answer || '')) })));
+  res.json(turns.map((t) => ({
+    ...t, question_html: renderMarkdown(String(t.question || '')), html: renderMarkdown(String(t.answer || '')),
+  })));
 });
 
 app.post('/api/ask', async (req, res, next) => {
@@ -744,7 +951,9 @@ app.post('/api/ask', async (req, res, next) => {
       const retrievalQuery = quote ? `${quote}\n${query}` : query;
       const retrieved = await retrieve(rows, retrievalQuery, prefs.retriever);
       let hits = retrieved.hits;
-      if (scope && rows.length && !hits.length) {
+      if (scope?.page && !scope.blocks.length && !quote && hits.length) {
+        hits = expandPageEvidence(rows, hits);
+      } else if (scope && rows.length && !hits.length) {
         hits = rows.slice(0, 3);
       }
       const retrievalMs = Math.round(performance.now() - start);
@@ -763,7 +972,6 @@ app.post('/api/ask', async (req, res, next) => {
         language: prefs.language,
       });
 
-      const warning = [retrieved.warning, reply.fallback_warning].filter(Boolean).join(' ') || null;
       const result: Record<string, unknown> = {
         model: reply.model,
         citations: reply.citations,
@@ -774,9 +982,10 @@ app.post('/api/ask', async (req, res, next) => {
         mode,
         retriever: retrieved.method,
         retrieval_ms: retrievalMs,
-        warning,
+        warning: retrieved.warning || null,
         latency_ms: Math.round(performance.now() - start),
       };
+      if (reply.retrieved_evidence?.length) result.retrieved_evidence = reply.retrieved_evidence;
       if (scope) {
         result.scope = scope;
       }
@@ -824,7 +1033,7 @@ app.get('/api/records', (_req, res) => {
 app.get('/api/records/:key', (req, res) => {
   const rec = store.records.get(String(req.params.key));
   if (!rec) throw httpError(404, '找不到資料。');
-  res.json({ id: rec.id, name: rec.name, content: rec.content });
+  res.json({ id: rec.id, name: rec.name, content: rec.content, html: renderMarkdown(rec.content) });
 });
 
 app.post('/api/records/import', upload.single('file'), (req, res) => {
@@ -846,8 +1055,18 @@ app.post('/api/records/import', upload.single('file'), (req, res) => {
       if (payload.schema !== 'aita-records-v1') throw new Error();
       if (!Array.isArray(payload.conversations) || !Array.isArray(payload.records)) throw new Error();
 
-      for (const chat of payload.conversations as Array<Record<string, unknown>>) {
-        if (typeof chat.title !== 'string' || !Array.isArray(chat.turns)) throw new Error();
+      type ImportedTurn = { question: string; answer: string; citations?: unknown; archived_citations?: unknown };
+      type ImportedChat = { title: string; turns: ImportedTurn[] };
+      const conversations = payload.conversations as ImportedChat[];
+      const records = payload.records as Array<Pick<RecordEntry, 'name' | 'content'>>;
+      if (conversations.some((chat) => !chat || typeof chat.title !== 'string' ||
+        !Array.isArray(chat.turns) || chat.turns.some((turn) => !turn ||
+          typeof turn.question !== 'string' || typeof turn.answer !== 'string')) ||
+        records.some((note) => !note || typeof note.name !== 'string' || typeof note.content !== 'string')) {
+        throw new Error();
+      }
+
+      for (const chat of conversations) {
         const key = uuidHex();
         store.conversations.set(key, {
           id: key,
@@ -855,11 +1074,10 @@ app.post('/api/records/import', upload.single('file'), (req, res) => {
           created: new Date().toISOString(),
           seq: nextSeq(),
         });
-        for (const t of chat.turns as Array<Record<string, unknown>>) {
-          if (typeof t.question !== 'string' || typeof t.answer !== 'string') throw new Error();
+        for (const t of chat.turns) {
           const metadata: Record<string, unknown> = { status: 'imported', citations: [] };
           const archived = t.citations || t.archived_citations;
-          if (archived) metadata.archived_citations = archived;
+          if (Array.isArray(archived)) metadata.archived_citations = archived;
           store.turns.push({
             id: store.nextTurnId++,
             conversation_id: key,
@@ -870,8 +1088,7 @@ app.post('/api/records/import', upload.single('file'), (req, res) => {
         }
       }
 
-      for (const note of payload.records as Array<Record<string, unknown>>) {
-        if (typeof note.name !== 'string' || typeof note.content !== 'string') throw new Error();
+      for (const note of records) {
         const id = uuidHex();
         store.records.set(id, { id, name: note.name.slice(0, 200), content: note.content, seq: nextSeq() });
       }
@@ -1015,8 +1232,7 @@ app.post('/api/mascot/animate', async (req, res, next) => {
 // Study Features (100% Local Ollama): Syllabus Plan, Note Draft, Self-Test Quiz
 // ============================================================
 
-function enrichCoursePlan() {
-  const plan = store.coursePlan;
+function enrichCoursePlan(plan: CoursePlanRecord | undefined) {
   if (!plan) return null;
   const activeDocs = [...store.documents.values()].filter((d) => d.active && d.kind !== 'personal');
   const docsByFolder = new Map<string, Array<{ id: string; name: string; kind: string }>>();
@@ -1045,11 +1261,66 @@ function enrichCoursePlan() {
   };
 }
 
-app.get('/api/syllabus/plan', (_req, res) => {
-  res.json({ plan: enrichCoursePlan() });
+function findCoursePlan(id: unknown): CoursePlanRecord | undefined {
+  if (id === undefined) {
+    return store.coursePlans.size === 1 ? store.coursePlans.values().next().value : undefined;
+  }
+  const plan = typeof id === 'string' && store.coursePlans.get(id);
+  if (!plan) throw httpError(404, '找不到這門課程。');
+  return plan;
+}
+
+function requiredCoursePlan(id: unknown): CoursePlanRecord {
+  const plan = findCoursePlan(id);
+  if (!plan) throw httpError(422, '請先選擇課程。');
+  return plan;
+}
+
+const updatingCourses = new Set<string>();
+
+app.get('/api/syllabus/plan', (req, res) => {
+  const courses = [...store.coursePlans.values()].map(({ id, course_title, root_folder_id }) =>
+    ({ id, course_title, root_folder_id }));
+  // A browser may retain a selection from a different local copy of the library.
+  const plan = (typeof req.query.course_id === 'string' && store.coursePlans.get(req.query.course_id))
+    || store.coursePlans.values().next().value;
+  res.json({ courses, plan: enrichCoursePlan(plan) });
 });
 
-app.post('/api/syllabus/plan', upload.single('file'), async (req, res, next) => {
+app.patch('/api/syllabus/plan', async (req, res, nextError) => {
+  try {
+    const plan = requiredCoursePlan(req.body?.course_id);
+    const title = validatedFolderName(req.body?.course_title);
+    const revised = structuredClone(plan);
+    revised.course_title = title;
+    await updateOverview(plan, revised);
+    Object.assign(plan, revised, { updated_at: new Date().toISOString() });
+    const folder = plan.root_folder_id && store.folders.get(plan.root_folder_id);
+    if (folder) folder.name = title;
+    schedulePersist();
+    res.json({ plan: enrichCoursePlan(plan) });
+  } catch (error) { nextError(error); }
+});
+
+app.patch('/api/syllabus/weeks/:week', async (req, res, nextError) => {
+  try {
+    const plan = requiredCoursePlan(req.body?.course_id);
+    const number = Number(req.params.week);
+    const type = req.body?.week_type;
+    if (!['lecture', 'holiday', 'exam', 'activity'].includes(type)) throw httpError(422, '無效的週次類型。');
+    const revised = structuredClone(plan);
+    const week = revised.weeks.find(item => item.week_number === number);
+    if (!week) throw httpError(404, '找不到對應的週次規劃。');
+    week.week_type = type;
+    week.requires_material = type === 'lecture';
+    await updateOverview(plan, revised, number);
+    Object.assign(plan, revised, { updated_at: new Date().toISOString() });
+    schedulePersist();
+    res.json({ plan: enrichCoursePlan(plan) });
+  } catch (error) { nextError(error); }
+});
+
+app.post(['/api/syllabus/plan', '/api/syllabus/extract'], upload.single('file'), async (req, res, next) => {
   try {
     let sourceName = '課程大綱';
     let buffer: Buffer | null = null;
@@ -1066,7 +1337,9 @@ app.post('/api/syllabus/plan', upload.single('file'), async (req, res, next) => 
     }
 
     if (typeof req.body?.text === 'string' && req.body.text.trim()) {
-      text = req.body.text.trim().slice(0, 80_000);
+      const submittedText = String(req.body.text).trim();
+      if (submittedText.length > 80_000) throw httpError(422, '課綱內容超過單次匯入長度。');
+      text = submittedText;
       if (!req.file && typeof req.body?.name === 'string' && req.body.name.trim()) {
         sourceName = req.body.name.trim().slice(0, 120);
       }
@@ -1076,10 +1349,22 @@ app.post('/api/syllabus/plan', upload.single('file'), async (req, res, next) => 
       throw httpError(422, '請上傳課綱檔案／截圖，或直接貼上課綱文字。');
     }
 
-    const outcome = await generateSyllabusPlan({ sourceName, buffer, text });
+    if (req.path === '/api/syllabus/extract') {
+      const { text: outline, ready, inferred, gaps, weeks, parser_engine } = await extractSyllabusSource({sourceName, buffer, text});
+      res.json({text: outline, ready, inferred, gaps, week_count: weeks.length, parser_engine});
+      return;
+    }
+    const parser = req.body?.reviewed_parser;
+    const reviewedParser = !buffer && (parser === 'mineru' || parser === 'pdfjs' || parser === 'text') ? parser : undefined;
+    const existingPlan = req.body?.course_id === undefined ? undefined : requiredCoursePlan(req.body.course_id);
+    const title = typeof req.body?.course_title === 'string' ? req.body.course_title.trim().slice(0, 80) : '';
+    if (existingPlan && updatingCourses.has(existingPlan.id)) throw httpError(409, '正在更新這門課程。');
+    if (existingPlan) updatingCourses.add(existingPlan.id);
+    const outcome = await generateSyllabusPlan({ sourceName, buffer, text, existingPlan, title, reviewedParser })
+      .finally(() => { if (existingPlan) updatingCourses.delete(existingPlan.id); });
     res.json({
       ...outcome,
-      plan: enrichCoursePlan(),
+      plan: enrichCoursePlan(outcome.plan),
     });
   } catch (err) {
     next(err);
@@ -1091,10 +1376,11 @@ app.post('/api/syllabus/weeks/:week/folder', (req, res) => {
   if (!Number.isInteger(weekNumber) || weekNumber < 1) {
     throw httpError(422, '請指定有效的週次編號。');
   }
-  const outcome = ensureFolderForWeek(weekNumber);
+  const plan = requiredCoursePlan(req.body?.course_id);
+  const outcome = ensureFolderForWeek(plan, weekNumber);
   res.json({
     ...outcome,
-    plan: enrichCoursePlan(),
+    plan: enrichCoursePlan(plan),
   });
 });
 
@@ -1105,8 +1391,13 @@ app.post('/api/syllabus/recommend-folder', (req, res) => {
     res.json({ recommendation: null });
     return;
   }
-  const recommendation = recommendFolderForMaterial(filename, preview);
+  const recommendation = recommendFolderForMaterial(findCoursePlan(req.body?.course_id), filename, preview);
   res.json({ recommendation });
+});
+
+app.post('/api/syllabus/auto-archive', (req, res) => {
+  const plan = requiredCoursePlan(req.body?.course_id);
+  res.json({ ...archiveCourseMaterials(plan), plan: enrichCoursePlan(plan) });
 });
 
 app.post('/api/syllabus/preview', async (req, res, next) => {
@@ -1116,7 +1407,7 @@ app.post('/api/syllabus/preview', async (req, res, next) => {
     if (!Number.isInteger(weekNumber) || weekNumber < 1) {
       throw httpError(422, '請指定有效的週次編號。');
     }
-    const result = await generateWeekPreview({ weekNumber, conversationId });
+    const result = await generateWeekPreview({ plan: requiredCoursePlan(req.body?.course_id), weekNumber, conversationId });
     res.json(result);
   } catch (err) {
     next(err);
@@ -1185,19 +1476,23 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ detail });
 });
 
-// Hydrate local persisted data before accepting traffic.
-loadStore();
+// A legacy database is imported once, before accepting traffic.
+if (!loadStore() && migrateLegacyStore()) {
+  console.log('Migrated the legacy AITA SQLite store to BIIBO.');
+}
 
-const PORT = Number(process.env.PORT) || 3000;
-// Bind strictly to 127.0.0.1 for local personal use; allow 0.0.0.0 in Cloud Run preview or explicit HOST override.
-const HOST = process.env.HOST || (process.env.K_SERVICE ? '0.0.0.0' : '127.0.0.1');
 app.listen(PORT, HOST, () => {
   console.log(`AITA server running on http://${HOST}:${PORT}`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    persistStoreNow();
+    try {
+      persistStoreNow();
+    } catch (err) {
+      console.error('[store] Failed to save on shutdown:', err);
+      process.exit(1);
+    }
     process.exit(0);
   });
 }

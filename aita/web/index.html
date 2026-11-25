@@ -2,9 +2,9 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>BIIBO · Your Personal Tutor.</title>
+  <title>BIIBO · Graduate Study Assistant</title>
   <meta name="description" content="BIIBO — Your Personal Tutor. Modern EdTech course reader and AI tutor with PDF.js viewing, Markdown notes, TF-IDF retrieval, citations, and interaction record export.">
-  <meta property="og:title" content="BIIBO · Your Personal Tutor.">
+  <meta property="og:title" content="BIIBO · Graduate Study Assistant">
   <meta property="og:description" content="BIIBO — Your Personal Tutor. Modern EdTech course reader and AI tutor with PDF.js viewing, Markdown notes, TF-IDF retrieval, citations, and interaction record export.">
   <link rel="icon" type="image/svg+xml" href="/static/assets/biibo-logo-favicon.svg">
   <link rel="apple-touch-icon" href="/static/assets/biibo-logo-icon.svg">
@@ -23,7 +23,7 @@
         <span class="brand-wordmark">BII<span class="brand-wordmark-accent">BO</span></span>
       </a>
     </div>
-    <h1 class="visually-hidden">BIIBO · 個人課程助教</h1>
+    <h1 class="visually-hidden">BIIBO · 研究所學習助教</h1>
     <nav class="narrow-nav" aria-label="工作區">
       <a href="#library">教材清單</a>
       <a href="#reader">閱讀</a>
@@ -31,7 +31,7 @@
     </nav>
     <div class="masthead-actions">
       <a href="/library" id="library-link" class="ghost-btn nav-link-btn">教材庫</a>
-      <button id="language-toggle" type="button" class="ghost-btn" aria-label="切換介面語言">English</button>
+      <button id="language-toggle" type="button" class="ghost-btn" aria-label="切換介面語言">EN</button>
       <button id="records-open" type="button" class="ghost-btn">對話管理</button>
       <button id="settings-open" type="button" class="ghost-btn">設定</button>
     </div>
@@ -71,12 +71,15 @@
         </button>
       </div>
       <div class="library-actions">
-        <button type="button" id="import-open" class="primary">＋ 匯入教材</button>
-        <button type="button" id="folder-open">新增分類</button>
-        <button type="button" id="syllabus-open" class="syllabus-action-btn">課綱規劃</button>
+        <button type="button" id="import-open" class="primary">＋ 匯入</button>
       </div>
       <div id="jobs" aria-live="polite"></div>
-      <section id="syllabus-panel" class="syllabus-panel" aria-label="課綱規劃" hidden></section>
+      <section id="syllabus-panel" class="syllabus-panel" aria-label="課綱規劃" hidden>
+        <div id="syllabus-course-controls" class="syllabus-course-controls" hidden>
+          <select id="active-course" aria-label="切換課程"></select>
+        </div>
+        <div id="syllabus-content"></div>
+      </section>
       <div id="materials" tabindex="-1"></div>
       <div class="sidebar-brand-foot">
         <img class="sidebar-brand-mark" src="/static/assets/biibo-logo-sidebar.svg" alt="" width="22" height="22" aria-hidden="true" referrerpolicy="no-referrer">
@@ -157,7 +160,7 @@
           </div>
           <h3>直接將教材檔案拖曳至此</h3>
           <p>支援 PDF、Markdown（.md）與 TXT，放開即可匯入閱讀；也可以從左側教材庫選擇既有教材。</p>
-          <p class="dropzone-hint" id="reader-drop-status" aria-live="polite">拖曳檔案到此處，或點擊左側「＋ 匯入教材」</p>
+          <p class="dropzone-hint" id="reader-drop-status" aria-live="polite">拖曳檔案到此處，或點擊左側「＋ 匯入」</p>
         </div>
       </article>
       <div id="selection-tools" popover="manual" role="group" aria-label="選取文字操作">
@@ -286,8 +289,6 @@
             </div>
           </div>
           <div class="notes-meta-bar">
-            <label for="note-picker" class="visually-hidden">已存筆記</label>
-            <select id="note-picker" aria-label="已存筆記"><option value="">新增筆記</option></select>
             <label for="note-title" class="visually-hidden">筆記標題</label>
             <input id="note-title" type="text" required maxlength="160" placeholder="輸入筆記標題…">
           </div>
@@ -390,8 +391,13 @@
   </div>
   <p id="error" role="alert" hidden></p>
   <dialog id="import-dialog" aria-labelledby="import-title">
+    <div class="dialog-head"><h2 id="import-title">匯入</h2></div>
+    <div class="intake-tabs" role="tablist" aria-label="匯入類型">
+      <button type="button" id="intake-material-tab" role="tab" aria-selected="true" aria-controls="intake-material">匯入教材</button>
+      <button type="button" id="intake-syllabus-tab" role="tab" aria-selected="false" aria-controls="intake-syllabus" tabindex="-1">課綱規劃</button>
+    </div>
+    <section id="intake-material" role="tabpanel" aria-labelledby="intake-material-tab">
     <form id="import-form">
-      <div class="dialog-head"><h2 id="import-title">匯入教材</h2></div>
       <label for="material-file">教材檔案</label>
       <label class="file-picker" id="import-dropzone" for="material-file">
         <input id="material-file" class="file-picker-input" type="file" accept=".pdf,.md,.txt" multiple required>
@@ -415,6 +421,53 @@
       <p id="import-status" role="status"></p>
       <div class="actions"><button type="button" data-close>關閉</button><button class="primary">確認匯入</button></div>
     </form>
+    </section>
+    <section id="intake-syllabus" role="tabpanel" aria-labelledby="intake-syllabus-tab" hidden>
+    <form id="syllabus-form">
+      <p id="syllabus-dialog-lead" class="dialog-lead">上傳課綱或貼上內容，由 BIIBO 建立授課週次分類和課程總覽筆記。</p>
+      <label for="syllabus-course-title">課程名稱（選填）</label>
+      <input id="syllabus-course-title" maxlength="80">
+      <label for="syllabus-file">課綱檔案或截圖（PDF / 圖片 / MD / TXT）</label>
+      <label class="file-picker" id="syllabus-dropzone" for="syllabus-file">
+        <input id="syllabus-file" class="file-picker-input" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.md,.txt">
+        <span class="file-picker-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <path d="M14 2v6h6"/>
+            <path d="M8 13h8"/><path d="M8 17h5"/>
+          </svg>
+        </span>
+        <span class="file-picker-body">
+          <span class="file-picker-action">選擇檔案、圖片或拖曳至此</span>
+          <span class="file-picker-meta" id="syllabus-file-name">支援 PDF、PNG/JPG/WebP 截圖、Markdown、TXT</span>
+        </span>
+      </label>
+      <div class="syllabus-text-head">
+        <label for="syllabus-text">或直接貼上課綱文字／剪貼簿截圖（Ctrl+V / Cmd+V）</label>
+        <button type="button" id="syllabus-paste-btn" class="syllabus-paste-btn">貼上剪貼簿圖片</button>
+      </div>
+      <textarea id="syllabus-text" rows="5" maxlength="80000" aria-describedby="syllabus-review-hint" placeholder="Week 1 課程介紹&#10;Week 2 閱讀與討論&#10;Week 3 期中考"></textarea>
+      <p id="syllabus-review-hint" class="small" hidden>核對原文、週次與日期。可直接編輯，每週從「Week N」開始，同週的其他項目另起一行。</p>
+      <div id="syllabus-image-preview" class="syllabus-image-preview" hidden>
+        <img id="syllabus-preview-img" class="syllabus-preview-thumb" alt="課綱圖片預覽">
+        <div class="syllabus-preview-info">
+          <span id="syllabus-preview-name" class="syllabus-preview-name"></span>
+          <span id="syllabus-preview-meta" class="syllabus-preview-meta"></span>
+        </div>
+        <button type="button" id="syllabus-preview-clear" class="syllabus-preview-clear">移除圖片</button>
+      </div>
+      <ol id="syllabus-stages" class="syllabus-stages" hidden>
+        <li data-stage="1">擷取課綱原文與週次</li>
+        <li data-stage="2">核對並確認課綱</li>
+        <li data-stage="3">儲存規劃與總覽筆記</li>
+      </ol>
+      <p id="syllabus-status" role="status"></p>
+      <div class="actions">
+        <button type="button" data-close>關閉</button>
+        <button type="submit" id="syllabus-submit" class="primary">預覽課綱</button>
+      </div>
+    </form>
+    </section>
   </dialog>
   <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form">
@@ -431,14 +484,33 @@
         </div>
         <div id="engine-provider-grid" class="engine-provider-grid" role="radiogroup" aria-label="模型引擎來源"></div>
         <p id="engine-hint" class="engine-hint"></p>
+        <div id="cloud-key-wrap" class="custom-model-wrap" hidden>
+          <label for="cloud-key">API 金鑰</label>
+          <input id="cloud-key" type="password" maxlength="1024" autocomplete="off" spellcheck="false">
+        </div>
         <label for="model" id="model-label">使用模型</label>
         <div class="field-action">
           <select id="model" required></select>
+          <button type="button" id="load-provider-models" hidden>取得模型清單</button>
           <button type="button" id="test-engine">測試連線</button>
         </div>
         <div id="custom-model-wrap" class="custom-model-wrap" hidden>
           <label for="custom-model">自訂模型名稱</label>
           <input id="custom-model" type="text" maxlength="120" placeholder="例如：llama3.2:3b、gpt-4.1、claude-sonnet-4-20250514">
+        </div>
+        <div id="cli-options" class="settings-cli-grid" hidden>
+          <div class="settings-field">
+            <label for="cli-reasoning">推理強度</label>
+            <select id="cli-reasoning" aria-label="推理強度"></select>
+          </div>
+          <div id="cli-service-tier-wrap" class="settings-field" hidden>
+            <label for="cli-service-tier">Fast 模式</label>
+            <select id="cli-service-tier" aria-label="Fast 模式">
+              <option value="">沿用 CLI 設定</option>
+              <option value="default">標準速度</option>
+              <option value="fast">啟用 Fast</option>
+            </select>
+          </div>
         </div>
       </div>
       <div class="settings-divider" aria-hidden="true"></div>
@@ -460,30 +532,41 @@
       <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存設定</button></div>
     </form>
   </dialog>
-  <dialog id="records-dialog" aria-labelledby="records-title">
-    <div class="dialog-head"><h2 id="records-title">對話管理</h2></div>
+  <dialog id="records-dialog" class="records-dialog" aria-labelledby="records-title">
     <form id="records-export">
-      <fieldset>
-        <legend>管理已儲存的對話</legend>
-        <div class="records-bar" id="records-bar" hidden>
-          <label class="checkbox-row records-select-all">
-            <input type="checkbox" id="record-select-all">
-            <span>全選</span>
-          </label>
-          <span id="record-selected-count" class="records-selected-count">已選 0 筆</span>
-        </div>
-        <div id="record-list"></div>
-      </fieldset>
-      <pre id="record-view" hidden></pre>
-      <label for="format">匯出格式</label><select id="format"><option value="json">AITA JSON</option><option value="md">Markdown</option></select>
-      <p id="records-status" role="status"></p>
-      <div class="actions records-actions">
-        <button type="button" id="records-delete" class="danger-btn" disabled>批量刪除</button>
-        <div class="records-actions-right">
-          <button type="button" data-close>關閉</button>
-          <button class="primary" id="records-export-btn">批量匯出</button>
-        </div>
+      <header class="records-header">
+        <h2 id="records-title">對話管理</h2>
+        <button type="button" class="records-close" data-close aria-label="關閉"><span aria-hidden="true">×</span></button>
+      </header>
+      <div class="records-grid" data-view="list">
+        <section class="records-list-panel" aria-label="對話清單">
+          <div class="records-bar" id="records-bar">
+            <label class="checkbox-row records-select-all"><input type="checkbox" id="record-select-all" disabled><span>全選</span></label>
+            <span id="record-selected-count" class="records-selected-count">已選 0 筆</span>
+          </div>
+          <div id="record-list" class="records-scroll"></div>
+        </section>
+        <section class="records-preview" aria-labelledby="record-preview-title">
+          <header id="record-preview-head" class="record-preview-head" hidden>
+            <button type="button" id="record-back" class="records-back">返回清單</button>
+            <div class="record-preview-heading">
+              <h3 id="record-preview-title">對話預覽</h3>
+              <time id="record-preview-time" hidden></time>
+            </div>
+          </header>
+          <div id="record-view" class="records-scroll record-view" aria-live="polite"></div>
+        </section>
       </div>
+      <footer class="records-footer">
+        <p id="records-status" role="status"></p>
+        <div class="actions records-actions">
+          <button type="button" id="records-delete" class="danger-btn" disabled>批量刪除</button>
+          <div class="records-actions-right">
+            <select id="format" aria-label="匯出格式"><option value="json">AITA JSON</option><option value="md">Markdown</option></select>
+            <button type="submit" class="primary" id="records-export-btn" disabled>批量匯出</button>
+          </div>
+        </div>
+      </footer>
     </form>
   </dialog>
   <dialog id="folder-dialog" aria-labelledby="folder-title"><form id="folder-form">
@@ -494,58 +577,32 @@
     <label for="folder-parent">上層分類</label><select id="folder-parent"></select><p id="folder-status" role="status"></p>
     <div class="actions"><button type="button" data-close>關閉</button><button class="primary">新增</button></div>
   </form></dialog>
+  <dialog id="rename-folder-dialog" aria-labelledby="rename-folder-title"><form id="rename-folder-form">
+    <div class="dialog-head"><h2 id="rename-folder-title">重新命名分類</h2></div>
+    <label for="rename-folder-name">分類名稱</label>
+    <input id="rename-folder-name" required maxlength="80">
+    <p id="rename-folder-status" role="status"></p>
+    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存</button></div>
+  </form></dialog>
+  <dialog id="edit-course-dialog" aria-labelledby="edit-course-title"><form id="edit-course-form">
+    <div class="dialog-head"><h2 id="edit-course-title">重新命名課程</h2></div>
+    <label for="edit-course-name">課程名稱</label><input id="edit-course-name" required maxlength="80">
+    <p id="edit-course-status" role="status"></p>
+    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存</button></div>
+  </form></dialog>
+  <dialog id="move-folder-dialog" aria-labelledby="move-folder-title"><form id="move-folder-form">
+    <div class="dialog-head"><h2 id="move-folder-title">移動分類</h2></div>
+    <p id="move-folder-name"></p>
+    <label for="move-folder-parent">上層分類</label><select id="move-folder-parent" aria-label="上層分類"></select>
+    <p id="move-folder-status" role="status"></p>
+    <div class="actions"><button type="button" data-close>關閉</button><button class="primary">移動</button></div>
+  </form></dialog>
   <dialog id="doc-info-dialog" aria-labelledby="doc-info-title"><form id="doc-info-form">
     <div class="dialog-head"><h2 id="doc-info-title">教材資訊</h2></div>
     <label for="doc-folder">分類</label><select id="doc-folder"></select>
     <label for="doc-summary">概述</label><textarea id="doc-summary" maxlength="500" rows="4"></textarea><p id="doc-info-status" role="status"></p>
     <div class="actions"><button type="button" data-close>關閉</button><button class="primary">儲存</button></div>
   </form></dialog>
-  <dialog id="syllabus-dialog" class="study-dialog" aria-labelledby="syllabus-dialog-title">
-    <form id="syllabus-form">
-      <div class="dialog-head">
-        <h2 id="syllabus-dialog-title">上傳課程大綱 · AI 初步規劃</h2>
-      </div>
-      <p class="dialog-lead">上傳 PDF 或課綱截圖後，由 BIIBO 讀取內容並建立授課週次分類與置頂總覽筆記；放假、純考試與互評週會自動略過空資料夾，不誤報缺講義。</p>
-      <label for="syllabus-file">課綱檔案或截圖（PDF / 圖片 / MD / TXT）</label>
-      <label class="file-picker" id="syllabus-dropzone" for="syllabus-file">
-        <input id="syllabus-file" class="file-picker-input" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.md,.txt">
-        <span class="file-picker-icon" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <path d="M14 2v6h6"/>
-            <path d="M8 13h8"/><path d="M8 17h5"/>
-          </svg>
-        </span>
-        <span class="file-picker-body">
-          <span class="file-picker-action">選擇檔案、圖片或拖曳至此</span>
-          <span class="file-picker-meta" id="syllabus-file-name">支援 PDF、PNG/JPG/WebP 截圖、Markdown、TXT</span>
-        </span>
-      </label>
-      <div class="syllabus-text-head">
-        <label for="syllabus-text">或直接貼上課綱文字／剪貼簿截圖（Ctrl+V / Cmd+V）</label>
-        <button type="button" id="syllabus-paste-btn" class="syllabus-paste-btn">貼上剪貼簿圖片</button>
-      </div>
-      <textarea id="syllabus-text" rows="5" maxlength="80000" placeholder="可直接按 Ctrl+V / Cmd+V 貼上課綱截圖，或貼上文字例如：&#10;Week 1 課程介紹與資料前處理&#10;Week 4 教師節放假&#10;Week 9 期中考 (Midterm)…"></textarea>
-      <div id="syllabus-image-preview" class="syllabus-image-preview" hidden>
-        <img id="syllabus-preview-img" class="syllabus-preview-thumb" alt="課綱圖片預覽">
-        <div class="syllabus-preview-info">
-          <span id="syllabus-preview-name" class="syllabus-preview-name"></span>
-          <span id="syllabus-preview-meta" class="syllabus-preview-meta"></span>
-        </div>
-        <button type="button" id="syllabus-preview-clear" class="syllabus-preview-clear">移除圖片</button>
-      </div>
-      <ol id="syllabus-stages" class="syllabus-stages" hidden>
-        <li data-stage="1">由 BIIBO 讀取課綱內容，整理每週主題、假日與考試時程</li>
-        <li data-stage="2">僅為授課週自動建立分類資料夾，並置頂完整「課程總覽筆記」</li>
-        <li data-stage="3">追蹤授課週講義缺口，並啟用預習／考前複習引導</li>
-      </ol>
-      <p id="syllabus-status" role="status"></p>
-      <div class="actions">
-        <button type="button" data-close>關閉</button>
-        <button type="submit" id="syllabus-submit" class="primary">開始 AI 規劃</button>
-      </div>
-    </form>
-  </dialog>
   <dialog id="quiz-dialog" class="quiz-dialog" aria-labelledby="quiz-dialog-title">
     <div class="quiz-shell">
       <header class="quiz-head">

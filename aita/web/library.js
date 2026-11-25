@@ -15,7 +15,10 @@ const groupMaterialActionLabel = {
 let folderExpanded = new Set(readLocal("aita-folders-expanded", []));
 let folderGroups = readLocal("biibo-folder-groups", readLocal("biibo-folder-kinds", {}));
 let groupExpanded = new Set(readLocal("biibo-groups-expanded", ["course", "personal"]));
-let dragged = "";
+const groupHeights = readLocal("biibo-group-heights", {});
+let dragged = null;
+let folderToMove = null;
+let folderToRename = null;
 let infoDocument;
 let noteSource = null;
 let noteExtra = "";
@@ -50,9 +53,23 @@ function folderGroupOf(folder) {
   return "course";
 }
 
-function folderOptions(placeholder, group = null) {
+function folderPath(id) {
+  const path = [];
+  const seen = new Set();
+  while (id && !seen.has(id)) {
+    seen.add(id);
+    const folder = state.folders.find(item => item.id === id);
+    if (!folder) break;
+    path.push(folder.id);
+    id = folder.parent_id;
+  }
+  return path;
+}
+
+function folderOptions(placeholder, group = null, excludeBranch = null) {
   const options = [new Option(tr(placeholder),"")];
-  const pool = group ? state.folders.filter(f => folderGroupOf(f) === group) : state.folders;
+  const pool = state.folders.filter(f =>
+    (!group || folderGroupOf(f) === group) && (!excludeBranch || !folderPath(f.id).includes(excludeBranch)));
   const poolIds = new Set(pool.map(f => f.id));
   function append(parent, path) {
     const children = parent === null
@@ -72,27 +89,66 @@ async function amendDocument(id, changes) {
   await refreshDocuments();
 }
 
-function dropTarget(target, folder, targetGroup = null) {
-  target.title = tr("放在這裡移動教材");
+function rememberOpenPath(id) {
+  for (const ancestor of folderPath(id)) folderExpanded.add(ancestor);
+  try { saveLocal("aita-folders-expanded", [...folderExpanded]); } catch { /* Keep the open state in memory. */ }
+}
+
+async function moveFolder(id, parentId, group) {
+  await api(`/api/folders/${encodeURIComponent(id)}`, { method: "PATCH", ...json({ parent_id: parentId }) });
+  folderGroups[id] = group;
+  try { saveLocal("biibo-folder-groups", folderGroups); } catch { /* Keep the group in memory. */ }
+  rememberOpenPath(parentId);
+  await refreshDocuments();
+}
+
+function enableMaterialDrag(handle, kind, item) {
+  handle.draggable = true;
+  handle.addEventListener("dragstart", event => {
+    dragged = { kind, id: item.id };
+    closeKindAddMenu();
+    event.dataTransfer.setData("text/plain", item.name);
+    event.dataTransfer.effectAllowed = "move";
+  });
+  handle.addEventListener("dragend", () => {
+    dragged = null;
+    document.querySelectorAll("#materials .drop-target").forEach(target => target.classList.remove("drop-target"));
+  });
+}
+
+function dropTarget(target, parentId, targetGroup) {
+  target.title = tr("放在這裡移動教材或分類");
+  function canDrop(item) {
+    if (!item) return false;
+    if (item.kind === "folder") {
+      const source = state.folders.find(folder => folder.id === item.id);
+      return source && folderGroupOf(source) === targetGroup
+        && source.parent_id !== parentId && !folderPath(parentId).includes(source.id);
+    }
+    const doc = state.documents.find(d => d.id === item.id);
+    return doc && docGroupOf(doc) === targetGroup && (doc.folder_id || null) !== parentId;
+  }
   target.addEventListener("dragover", event => {
-    if (!dragged) return;
-    const doc = state.documents.find(d => d.id === dragged);
-    if (!doc || (targetGroup && docGroupOf(doc) !== targetGroup)) return;
+    if (!canDrop(dragged)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     target.classList.add("drop-target");
   });
   target.addEventListener("dragleave", () => target.classList.remove("drop-target"));
   target.addEventListener("drop", event => {
-    event.preventDefault();
     target.classList.remove("drop-target");
-    const id = dragged;
-    dragged = "";
-    const doc = state.documents.find(d => d.id === id);
-    if (!id || !doc || (targetGroup && docGroupOf(doc) !== targetGroup)) return;
-    if (folder) folderExpanded.add(folder);
-    try { saveLocal("aita-folders-expanded",[...folderExpanded]); } catch (error) { report(error); }
-    amendDocument(id,{folder_id:folder}).catch(report);
+    const item = dragged;
+    if (!canDrop(item)) return;
+    event.preventDefault();
+    dragged = null;
+    if (item.kind === "folder") {
+      moveFolder(item.id, parentId, targetGroup)
+        .then(() => folderHeading(item.id)?.scrollIntoView({ block: "nearest" }))
+        .catch(error => report(error, "無法移動分類，請稍後再試。"));
+    } else {
+      rememberOpenPath(parentId);
+      amendDocument(item.id, { folder_id: parentId }).catch(report);
+    }
   });
 }
 
@@ -131,13 +187,13 @@ function materialsList(files) {
     const link = element("button", undefined, "doc-link");
     link.type = "button";
     link.dataset.key = doc.id;
-    link.draggable = true;
     link.setAttribute("aria-current",String(doc.id === state.document));
     const badge = docFormatBadge(doc);
     link.append(
       element("span", badge.label, `doc-badge ${badge.cls}`),
       element("span", doc.name, "doc-link-name")
     );
+    if (doc.note_page) link.append(element("span", `P.${doc.note_page}`, "doc-page-badge"));
     if (doc.pinned) {
       const pin = element("span", undefined, "doc-pin-icon");
       pin.title = english() ? "Pinned overview note" : "置頂課程總覽筆記";
@@ -146,15 +202,7 @@ function materialsList(files) {
       link.append(pin);
     }
     link.addEventListener("click", () => Promise.resolve().then(() => openDocument(doc.id)).catch(report));
-    link.addEventListener("dragstart",event => {
-      dragged = doc.id;
-      event.dataTransfer.setData("text/plain",doc.name);
-      event.dataTransfer.effectAllowed = "move";
-    });
-    link.addEventListener("dragend",() => {
-      dragged = "";
-      document.querySelectorAll(".drop-target").forEach(target => target.classList.remove("drop-target"));
-    });
+    enableMaterialDrag(link, "document", doc);
     const move = button("⋯",() => openDocInfo(doc),"material-move");
     move.setAttribute("aria-label",tr("移動教材") + " · " + doc.name);
     row.append(link,move);
@@ -165,6 +213,7 @@ function materialsList(files) {
 
 let activeKindMenu = null;
 let activeKindTrigger = null;
+let activeKindAnchor = null;
 
 function closeKindAddMenu() {
   if (activeKindMenu) {
@@ -175,6 +224,7 @@ function closeKindAddMenu() {
     activeKindTrigger.setAttribute("aria-expanded", "false");
     activeKindTrigger = null;
   }
+  activeKindAnchor = null;
 }
 
 function triggerAddMaterialForGroup(group) {
@@ -216,13 +266,18 @@ function openKindAddMenu(group, triggerBtn) {
   });
 
   menu.append(addDocBtn, addSubBtn);
+  positionLibraryMenu(menu, triggerBtn);
+}
+
+function positionLibraryMenu(menu, triggerBtn, point) {
   document.body.append(menu);
 
   const rect = triggerBtn.getBoundingClientRect();
   const menuW = menu.offsetWidth || 172;
   const menuH = menu.offsetHeight || 86;
-  const left = Math.max(8, Math.min(rect.right - menuW, window.innerWidth - menuW - 8));
-  const top = rect.bottom + menuH + 8 <= window.innerHeight
+  const left = Math.max(8, Math.min(point?.x ?? rect.right - menuW, window.innerWidth - menuW - 8));
+  const top = point ? Math.max(8, Math.min(point.y, window.innerHeight - menuH - 8))
+    : rect.bottom + menuH + 8 <= window.innerHeight
     ? rect.bottom + 6
     : Math.max(8, rect.top - menuH - 6);
   menu.style.left = `${left}px`;
@@ -231,8 +286,78 @@ function openKindAddMenu(group, triggerBtn) {
   triggerBtn.setAttribute("aria-expanded", "true");
   activeKindMenu = menu;
   activeKindTrigger = triggerBtn;
-  addDocBtn.focus();
+  activeKindAnchor = rect;
+  menu.querySelector("button")?.focus({ preventScroll: true });
 }
+
+function openFolderMenu(folder, group, heading, point) {
+  closeKindAddMenu();
+  const menu = element("div", undefined, "kind-add-menu");
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", folder.name);
+  const endpoint = `/api/folders/${encodeURIComponent(folder.id)}`;
+  const rename = button(tr("重新命名分類"), () => {
+    closeKindAddMenu();
+    folderToRename = folder;
+    $("rename-folder-name").value = folder.name;
+    $("rename-folder-status").textContent = "";
+    $("rename-folder-dialog").showModal();
+    $("rename-folder-name").select();
+  }, "kind-add-option");
+  const move = button(tr("移動分類"), () => {
+    closeKindAddMenu();
+    folderToMove = { folder, group };
+    $("move-folder-name").textContent = folder.name;
+    $("move-folder-parent").replaceChildren(...folderOptions("此類別頂層", group, folder.id));
+    $("move-folder-parent").value = folder.parent_id || "";
+    $("move-folder-status").textContent = "";
+    $("move-folder-dialog").showModal();
+  }, "kind-add-option");
+  const remove = button(tr("刪除分類"), async () => {
+    closeKindAddMenu();
+    const parent = state.folders.find(item => item.id === folder.parent_id);
+    const confirmed = window.confirm(parent
+      ? (english() ? `Delete “${folder.name}”? Materials and subfolders will move to “${parent.name}”.`
+        : `刪除「${folder.name}」？教材與子分類會移到「${parent.name}」。`)
+      : (english() ? `Delete “${folder.name}”? Materials and subfolders will move to the top level.`
+        : `刪除「${folder.name}」？教材與子分類會移到目前區塊的頂層。`));
+    if (!confirmed) { heading.focus(); return; }
+    await api(endpoint, { method: "DELETE" });
+    for (const child of state.folders.filter(item => item.parent_id === folder.id)) {
+      folderGroups[child.id] = folderGroupOf(child);
+    }
+    delete folderGroups[folder.id];
+    folderExpanded.delete(folder.id);
+    try {
+      saveLocal("biibo-folder-groups", folderGroups);
+      saveLocal("aita-folders-expanded", [...folderExpanded]);
+    } catch { /* The server has saved the change. */ }
+    await refreshDocuments();
+    (folderHeading(folder.parent_id) || $("materials").querySelector(`[data-group="${group}"] > summary`))?.focus();
+  }, "kind-add-option");
+  for (const action of [rename, move, remove]) action.setAttribute("role", "menuitem");
+  menu.append(rename, move, remove);
+  positionLibraryMenu(menu, heading, point);
+}
+
+function folderHeading(id) {
+  return id ? $("materials").querySelector(`.material-folder[data-folder-id="${CSS.escape(id)}"] > summary`) : null;
+}
+
+bindForm("rename-folder-form", async () => {
+  const folder = folderToRename;
+  const name = $("rename-folder-name").value.trim();
+  if (!name) throw Error(tr("請輸入分類名稱。"));
+  if (name !== folder.name) {
+    await api(`/api/folders/${encodeURIComponent(folder.id)}`, { method: "PATCH", ...json({ name }) });
+    await refreshDocuments();
+  }
+  $("rename-folder-dialog").close();
+}, "rename-folder-status");
+$("rename-folder-dialog").addEventListener("close", () => {
+  folderHeading(folderToRename?.id)?.focus();
+  folderToRename = null;
+});
 
 document.addEventListener("pointerdown", event => {
   if (!activeKindMenu) return;
@@ -240,14 +365,77 @@ document.addEventListener("pointerdown", event => {
   closeKindAddMenu();
 });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && activeKindMenu) {
+  if (!activeKindMenu) return;
+  if (event.key === "Escape") {
     const trigger = activeKindTrigger;
     closeKindAddMenu();
     trigger?.focus();
+  } else if (activeKindMenu.contains(document.activeElement)) {
+    const options = [...activeKindMenu.querySelectorAll("button")];
+    const index = options.indexOf(document.activeElement);
+    const next = { ArrowUp: (index - 1 + options.length) % options.length,
+      ArrowDown: (index + 1) % options.length, Home: 0, End: options.length - 1 }[event.key];
+    if (next !== undefined) {
+      event.preventDefault();
+      options[next]?.focus();
+    }
   }
 });
 window.addEventListener("resize", closeKindAddMenu);
-$("library")?.addEventListener("scroll", closeKindAddMenu, true);
+$("library")?.addEventListener("scroll", () => {
+  if (!activeKindAnchor || !activeKindTrigger) return;
+  const current = activeKindTrigger.getBoundingClientRect();
+  if (Math.abs(current.top - activeKindAnchor.top) > 2 || Math.abs(current.left - activeKindAnchor.left) > 2) {
+    closeKindAddMenu();
+  }
+}, true);
+
+function groupResizeHandle(group, label, body, defaultHeight = 260) {
+  const handle = element("div", undefined, "kind-resize");
+  const min = 96;
+  const max = () => Math.max(min, Math.min(840, Math.round(innerHeight * 0.65)));
+  body.id = `material-group-${group}`;
+  handle.tabIndex = 0;
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "horizontal");
+  handle.setAttribute("aria-controls", body.id);
+  handle.setAttribute("aria-label", english() ? `Resize ${label}` : `調整${label}清單高度`);
+  handle.setAttribute("aria-valuemin", String(min));
+  const setHeight = (value, remember = false) => {
+    const height = Math.round(Math.max(min, Math.min(max(), value)));
+    body.style.setProperty("--kind-max-height", `${height}px`);
+    handle.setAttribute("aria-valuemax", String(max()));
+    handle.setAttribute("aria-valuenow", String(height));
+    if (remember) {
+      groupHeights[group] = height;
+      try { saveLocal("biibo-group-heights", groupHeights); } catch { /* Keep the active size. */ }
+    }
+  };
+  setHeight(Number(groupHeights[group]) || defaultHeight);
+  let drag;
+  handle.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    drag = { id: event.pointerId, y: event.clientY, height: body.offsetHeight };
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", event => {
+    if (drag?.id === event.pointerId) setHeight(drag.height + event.clientY - drag.y);
+  });
+  handle.addEventListener("lostpointercapture", () => {
+    if (!drag) return;
+    drag = null;
+    setHeight(Number(handle.getAttribute("aria-valuenow")), true);
+  });
+  handle.addEventListener("keydown", event => {
+    const current = body.offsetHeight;
+    const next = { ArrowUp: current - 32, ArrowDown: current + 32, Home: min, End: max() }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    setHeight(next, true);
+  });
+  return handle;
+}
 
 function renderMaterials() {
   closeKindAddMenu();
@@ -298,7 +486,21 @@ function renderMaterials() {
           node.dataset.folderId = folder.id;
           node.open = folderExpanded.has(folder.id);
           const heading = element("summary", folder.name);
+          enableMaterialDrag(heading, "folder", folder);
           dropTarget(heading, folder.id, group);
+          heading.setAttribute("aria-haspopup", "menu");
+          heading.addEventListener("contextmenu", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openFolderMenu(folder, group, heading, event.clientX || event.clientY
+              ? { x: event.clientX, y: event.clientY } : undefined);
+          });
+          heading.addEventListener("keydown", event => {
+            if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+              event.preventDefault();
+              openFolderMenu(folder, group, heading);
+            }
+          });
           const files = groupDocs.filter(doc => doc.folder_id === folder.id);
           node.append(heading, materialsList(files));
           renderGroupFolders(folder.id, node);
@@ -323,6 +525,7 @@ function renderMaterials() {
       try { saveLocal("biibo-groups-expanded", [...groupExpanded]); } catch { /* The section remains usable. */ }
     });
     section.append(summary, body);
+    if (!isEmpty) section.append(groupResizeHandle(group, tr(label), body));
     content.append(section);
   }
   root.replaceChildren(content);
@@ -331,10 +534,9 @@ function renderMaterials() {
 window.expandCourseFolder = (folderId) => {
   if (!folderId) return;
   groupExpanded.add("course");
-  folderExpanded.add(folderId);
+  rememberOpenPath(folderId);
   try {
     saveLocal("biibo-groups-expanded", [...groupExpanded]);
-    saveLocal("aita-folders-expanded", [...folderExpanded]);
   } catch { /* Keeps in-memory state. */ }
   renderMaterials();
   const folderNode = $("materials")?.querySelector(`.material-folder[data-folder-id="${CSS.escape(folderId)}"]`);
@@ -346,7 +548,6 @@ window.expandCourseFolder = (folderId) => {
   }
 };
 
-$("folder-open").onclick = () => openFolderDialog("course");
 $("folder-kind")?.addEventListener("change", () => {
   $("folder-parent").replaceChildren(...folderOptions("此類別頂層", $("folder-kind").value));
 });
@@ -364,6 +565,16 @@ bindForm("folder-form",async () => {
   $("folder-dialog").close();
   await refreshDocuments();
 },"folder-status","無法建立分類，請確認名稱後再試。");
+bindForm("move-folder-form", async () => {
+  const { folder, group } = folderToMove;
+  const parentId = $("move-folder-parent").value || null;
+  if (parentId !== folder.parent_id) await moveFolder(folder.id, parentId, group);
+  $("move-folder-dialog").close();
+}, "move-folder-status", "無法移動分類，請稍後再試。");
+$("move-folder-dialog").addEventListener("close", () => {
+  folderHeading(folderToMove?.folder.id)?.focus();
+  folderToMove = null;
+});
 bindForm("doc-info-form",async () => {
   await amendDocument(infoDocument,{summary:$("doc-summary").value,folder_id:$("doc-folder").value||null});
   $("doc-info-dialog").close();
@@ -573,23 +784,6 @@ function resetDeleteConfirm() {
   del.setAttribute("aria-label", tr("刪除筆記"));
 }
 
-function fillNotePicker() {
-  const picker = $("note-picker");
-  if (!picker) return;
-  const allPersonal = state.documents.filter(doc => doc.kind === "personal" && doc.note_id);
-  const linked = noteSource ? allPersonal.filter(doc => doc.original_id === noteSource) : allPersonal;
-  const others = noteSource ? allPersonal.filter(doc => doc.original_id !== noteSource) : [];
-  const opts = [new Option(tr("新增筆記"), "")];
-  for (const doc of linked) opts.push(new Option(doc.name, doc.note_id));
-  for (const doc of others) opts.push(new Option(`· ${doc.name}`, doc.note_id));
-  picker.replaceChildren(...opts);
-  if (noteEdition && [...picker.options].some(o => o.value === noteEdition)) {
-    picker.value = noteEdition;
-  } else {
-    picker.value = "";
-  }
-}
-
 async function refreshNotePreview() {
   const preview = $("note-preview");
   if (!preview) return;
@@ -631,13 +825,13 @@ function setNoteViewMode(mode) {
   }
 }
 
-async function openNotes(sourceId = null, snippet = "", noteId = "") {
+async function openNotes(sourceId = null, snippet = "", noteId = "", focusEditor = true) {
   const normalizedSource = sourceId || null;
   if (typeof window.setRightPaneTab === "function") window.setRightPaneTab("notes", true);
+  if (!focusEditor && noteDirty) return;
   noteSource = normalizedSource;
   noteExtra = snippet || "";
   updateNoteSourceLabel();
-  fillNotePicker();
   resetDeleteConfirm();
 
   if (noteId) {
@@ -671,7 +865,7 @@ async function openNotes(sourceId = null, snippet = "", noteId = "") {
   }
   if (snippet) setNoteDirty(true);
   const focusTarget = $("note-title").value ? $("note-body") : $("note-title");
-  if (noteViewMode !== "preview") focusTarget.focus();
+  if (focusEditor && noteViewMode !== "preview") focusTarget.focus();
 }
 
 async function pickNote(key) {
@@ -684,7 +878,6 @@ async function pickNote(key) {
     noteSource = old.original_id || null;
     updateNoteSourceLabel();
   }
-  $("note-picker").value = noteEdition;
   $("note-title").value = old?.title || "";
   $("note-body").value = [old?.markdown, noteExtra].filter(Boolean).join("\n\n");
   $("note-delete").hidden = !noteEdition;
@@ -707,7 +900,6 @@ window.syncNotesWithReader = () => {
   if (noteSource !== sourceId) {
     noteSource = sourceId;
     updateNoteSourceLabel();
-    fillNotePicker();
     const linkedFirst = state.documents.find(d => d.kind === "personal" && d.original_id === sourceId && d.note_id);
     if (linkedFirst) pickNote(linkedFirst.note_id).catch(report);
   }
@@ -835,7 +1027,6 @@ async function deleteCurrentNote() {
     noteEdition = "";
     noteDirty = false;
     await refreshDocuments();
-    fillNotePicker();
     await pickNote("");
     $("note-status").textContent = tr("已刪除筆記");
   } catch (error) {
@@ -843,7 +1034,6 @@ async function deleteCurrentNote() {
   }
 }
 
-$("note-picker")?.addEventListener("change", () => pickNote($("note-picker").value).catch(report));
 $("note-new")?.addEventListener("click", () => {
   pickNote("").then(() => {
     if (noteSource) {
@@ -891,7 +1081,6 @@ setNoteViewMode(noteViewMode);
 updateNoteWordCount();
 document.addEventListener("aita-language", () => {
   updateNoteSourceLabel();
-  fillNotePicker();
   updateNoteWordCount();
 });
 
@@ -906,8 +1095,6 @@ bindForm("notes-form", async () => {
   noteExtra = "";
   noteDirty = false;
   await refreshDocuments();
-  fillNotePicker();
-  $("note-picker").value = note.id;
   $("note-delete").hidden = false;
   $("note-status").textContent = tr("已儲存筆記");
   if (noteViewMode !== "edit") refreshNotePreview().catch(report);
