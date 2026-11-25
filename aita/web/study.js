@@ -16,8 +16,8 @@
   let archiveStatus = "";
   let pastedSyllabusImage = null;
   let syllabusPreviewUrl = "";
-  let syllabusReview = null;
   let syllabusRequest = 0;
+  let syllabusStageTimer = 0;
 
   let draftScope = "page";
   let draftViewMode = "rendered";
@@ -157,7 +157,7 @@
 
   function attachClipboardImage(blobOrFile) {
     if (!blobOrFile) return false;
-    resetSyllabusReview();
+    cancelSyllabusPending();
     const ext = extensionForImageMime(blobOrFile.type);
     const stamp = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
     const name = blobOrFile.name && /\.(png|jpe?g|webp|gif)$/i.test(blobOrFile.name)
@@ -169,8 +169,8 @@
     showSyllabusImagePreview(file, "clipboard");
     updateSyllabusFileLabel();
     $("syllabus-status").textContent = english()
-      ? "Clipboard image attached. Preview its text before creating the plan."
-      : "已貼上剪貼簿圖片。請先預覽並核對辨識文字。";
+      ? "Clipboard image attached. Click Start AI planning to organize your course."
+      : "已貼上剪貼簿圖片，點擊「開始 AI 規劃」即可由 BIIBO 自動規劃課程。";
     return true;
   }
 
@@ -706,40 +706,54 @@
     $("syllabus-dialog-lead").textContent = syllabusTarget
       ? `${tr("更新課綱")} · ${syllabusTarget.course_title}`
       : tr("上傳課綱或貼上內容，由 BIIBO 建立授課週次分類和課程總覽筆記。");
-    $("syllabus-submit").textContent = syllabusReview
-      ? (english() ? (syllabusTarget ? "Confirm and update" : "Confirm and create") : (syllabusTarget ? "確認並更新" : "確認並建立"))
-      : (english() ? "Preview syllabus" : "預覽課綱");
-    $("syllabus-review-hint").hidden = !syllabusReview;
+    $("syllabus-submit").textContent = syllabusTarget
+      ? tr("更新課綱")
+      : tr("開始 AI 規劃");
   }
 
-  function resetSyllabusReview() {
+  function clearSyllabusStageTimer() {
+    if (syllabusStageTimer) {
+      clearTimeout(syllabusStageTimer);
+      syllabusStageTimer = 0;
+    }
+  }
+
+  function cancelSyllabusPending() {
     syllabusRequest++;
-    if (syllabusReview) $("syllabus-text").value = "";
-    syllabusReview = null;
-    renderSyllabusDialogMode();
+    clearSyllabusStageTimer();
+    const submitBtn = $("syllabus-submit");
+    if (submitBtn) submitBtn.disabled = false;
+  }
+
+  function resetSyllabusStages() {
+    const box = $("syllabus-stages");
+    if (!box) return;
+    for (const li of box.querySelectorAll("li")) {
+      li.classList.remove("is-active", "is-done");
+    }
   }
 
   function openSyllabusDialog(course) {
     syllabusTarget = course;
-    resetSyllabusReview();
+    cancelSyllabusPending();
     $("syllabus-form").reset();
     $("syllabus-course-title").value = course.course_title;
     renderSyllabusDialogMode();
     clearSyllabusImagePreview(false);
     $("syllabus-status").textContent = "";
-    $("syllabus-stages").hidden = true;
-    for (const li of $("syllabus-stages").querySelectorAll("li")) {
-      li.classList.remove("is-active", "is-done");
-    }
+    resetSyllabusStages();
     updateSyllabusFileLabel();
     showIntakeDialog("syllabus");
   }
 
   function setSyllabusStage(stageNum) {
-    const list = $("syllabus-stages");
-    if (!list) return;
-    list.hidden = false;
-    for (const li of list.querySelectorAll("li")) {
+    const box = $("syllabus-stages");
+    if (!box) return;
+    const video = $("syllabus-stage-video");
+    if (video && video.paused) {
+      video.play().catch(() => {});
+    }
+    for (const li of box.querySelectorAll("li")) {
       const n = Number(li.dataset.stage);
       li.classList.toggle("is-done", n < stageNum);
       li.classList.toggle("is-active", n === stageNum);
@@ -749,12 +763,14 @@
   $("import-dialog")?.addEventListener("close", () => {
     if (syllabusTarget) $("syllabus-course-title").value = "";
     syllabusTarget = null;
-    resetSyllabusReview();
+    cancelSyllabusPending();
     clearSyllabusImagePreview(false);
+    resetSyllabusStages();
+    renderSyllabusDialogMode();
   });
 
   $("syllabus-file")?.addEventListener("change", () => {
-    resetSyllabusReview();
+    cancelSyllabusPending();
     const file = $("syllabus-file")?.files?.[0];
     pastedSyllabusImage = null;
     if (file && isSyllabusImageFile(file)) {
@@ -767,7 +783,7 @@
   });
 
   $("syllabus-preview-clear")?.addEventListener("click", () => {
-    resetSyllabusReview();
+    cancelSyllabusPending();
     clearSyllabusImagePreview(true);
     $("syllabus-status").textContent = "";
   });
@@ -784,36 +800,6 @@
           return;
         }
       }
-    }
-  });
-
-  $("syllabus-paste-btn")?.addEventListener("click", async () => {
-    const status = $("syllabus-status");
-    if (!navigator.clipboard?.read) {
-      status.textContent = english()
-        ? "Press Ctrl+V (or Cmd+V) directly inside this window to paste a clipboard image."
-        : "請直接在此視窗按下 Ctrl+V（Mac 為 Cmd+V）貼上剪貼簿圖片。";
-      $("syllabus-text")?.focus();
-      return;
-    }
-    try {
-      const clipItems = await navigator.clipboard.read();
-      for (const item of clipItems) {
-        const imgType = item.types.find(t => t.startsWith("image/"));
-        if (imgType) {
-          const blob = await item.getType(imgType);
-          attachClipboardImage(blob);
-          return;
-        }
-      }
-      status.textContent = english()
-        ? "No image found in clipboard. Copy a screenshot first, then paste."
-        : "剪貼簿中沒有圖片，請先截圖或複製圖片後再試。";
-    } catch {
-      status.textContent = english()
-        ? "Clipboard access requires keyboard paste: press Ctrl+V (or Cmd+V) here."
-        : "瀏覽器限制直接讀取剪貼簿，請直接按下 Ctrl+V（Mac 為 Cmd+V）貼上圖片。";
-      $("syllabus-text")?.focus();
     }
   });
 
@@ -848,7 +834,7 @@
           : "僅支援 PDF、圖片（PNG/JPG/WebP/GIF）、Markdown 或 TXT 檔案。";
         return;
       }
-      resetSyllabusReview();
+      cancelSyllabusPending();
       pastedSyllabusImage = null;
       const dt = new DataTransfer();
       dt.items.add(file);
@@ -886,53 +872,49 @@
       return;
     }
 
-    const review = syllabusReview;
     const request = ++syllabusRequest;
-    if (review && !text) {
-      status.textContent = english() ? "Enter the weekly outline before confirming." : "請先填寫週次與課綱原文，再確認建立。";
-      return;
-    }
-
+    clearSyllabusStageTimer();
     submitBtn.disabled = true;
-    setSyllabusStage(review ? 2 : 1);
-    status.textContent = review
-      ? (english() ? "Saving the reviewed outline and preparing study objectives…" : "正在儲存已核對的課綱並準備學習目標…")
-      : (english() ? "Reading the syllabus for review…" : "正在擷取課綱原文供你核對…");
+    setSyllabusStage(1);
+    status.textContent = activeFile
+      ? (english() ? "Parsing syllabus file and extracting content…" : "正在解析課綱檔案並擷取內容…")
+      : (english() ? "Reading syllabus content…" : "正在讀取課綱內容…");
+
+    syllabusStageTimer = window.setTimeout(() => {
+      if (request !== syllabusRequest) return;
+      setSyllabusStage(2);
+      status.textContent = english()
+        ? "BIIBO is planning units, lecture folders, and key milestones…"
+        : "BIIBO 正在自動規劃課程單元、授課分類與重要時程…";
+    }, activeFile ? 2000 : 800);
 
     try {
       let result;
       const name = activeFile?.name || (english() ? "Pasted Syllabus" : "課程大綱");
-      if (!review && activeFile) {
+      if (activeFile) {
         const form = new FormData();
         form.append("file", activeFile, name);
         if (text) form.append("text", text);
-        const res = await api("/api/syllabus/extract", { method: "POST", body: form });
-        result = await parseJson(res, "/api/syllabus/extract");
+        if (courseId) form.append("course_id", courseId);
+        if (courseTitle) form.append("course_title", courseTitle);
+        const res = await api("/api/syllabus/plan", { method: "POST", body: form });
+        result = await parseJson(res, "/api/syllabus/plan");
       } else {
-        result = await post(review ? "/api/syllabus/plan" : "/api/syllabus/extract", review
-          ? { text, name: review.name, reviewed_parser: review.parser, course_id: courseId || undefined, course_title: courseTitle }
-          : { text, name });
+        result = await post("/api/syllabus/plan", {
+          text,
+          name,
+          course_id: courseId || undefined,
+          course_title: courseTitle
+        });
       }
 
       if (request !== syllabusRequest) return;
-      if (!review) {
-        syllabusReview = { name, parser: result.parser_engine };
-        $("syllabus-text").value = result.text;
-        renderSyllabusDialogMode();
-        setSyllabusStage(2);
-        const details = result.ready
-          ? (english() ? `${result.week_count} weeks ${result.inferred ? "inferred from numbering" : "identified"}.`
-            : `${result.inferred ? "依編號推定" : "已擷取"} ${result.week_count} 週。`)
-          : (english() ? "Review week numbers and separate each week before confirming." : "請標明每一週並修正缺少內容、重複或倒序的週次。");
-        const gaps = result.gaps?.length
-          ? (english() ? ` Check missing week numbers ${result.gaps.join(", ")}.` : `請核對缺少的週次 ${result.gaps.join("、")}。`)
-          : "";
-        status.textContent = details + gaps;
-        $("syllabus-text").focus();
-        return;
-      }
-
+      clearSyllabusStageTimer();
       setSyllabusStage(3);
+      status.textContent = english()
+        ? "Creating folders and updating pinned course overview…"
+        : "正在建立分類資料夾與置頂課程總覽筆記…";
+
       coursePlan = result.plan;
       selectedCourse = coursePlan.id || "";
       archiveStatus = "";
@@ -947,6 +929,9 @@
 
       await refreshDocuments();
       await refreshCoursePlan();
+      if (request !== syllabusRequest) return;
+
+      setSyllabusStage(4);
       if (syllabusTarget === target) {
         $("syllabus-text").value = "";
         clearSyllabusImagePreview(true);
@@ -954,30 +939,35 @@
       }
 
       const folderTotal = (result.created_folders?.length || 0) + (result.reused_folders?.length || 0);
+      const unitCount = result.plan?.weeks?.length || 0;
       let summaryMsg;
       if (result.overview_update_mode === "appended") {
         summaryMsg = english()
-          ? `Prepared ${folderTotal} lecture folders and appended updates to your overview note.`
-          : `已整理 ${folderTotal} 堂授課分類，並在原有總覽筆記末尾附加更新。`;
+          ? `Planned ${unitCount} units, prepared ${folderTotal} lecture folders, and appended updates to your overview note.`
+          : `已規劃 ${unitCount} 個單元、整理 ${folderTotal} 堂授課分類，並在原有總覽筆記末尾附加更新。`;
       } else {
         summaryMsg = english()
-          ? `Prepared ${folderTotal} lecture folders and pinned your course overview note.`
-          : `已整理 ${folderTotal} 堂授課分類，並置頂課程總覽筆記。`;
+          ? `Planned ${unitCount} units, prepared ${folderTotal} lecture folders, and pinned your course overview note.`
+          : `已規劃 ${unitCount} 個單元、整理 ${folderTotal} 堂授課分類，並置頂課程總覽筆記。`;
       }
 
       status.textContent = summaryMsg + (result.enriched ? "" : (english()
-        ? " Study objectives were unavailable. The reviewed schedule was saved." : "學習目標未生成，已儲存核對過的時程。"));
-      resetSyllabusReview();
+        ? " (Saved with automatic structure extraction while the AI model was offline.)"
+        : "（AI 模型暫時離線，已以自動結構解析完成建立。）"));
       clearSyllabusImagePreview(true);
     } catch (error) {
       if (request !== syllabusRequest) return;
-      $("syllabus-stages").hidden = true;
+      clearSyllabusStageTimer();
+      resetSyllabusStages();
       status.textContent = friendlyError(
         error,
-        review ? "無法儲存規劃，請核對週次原文後再試。" : "無法擷取課綱，請確認檔案或貼上課綱文字。"
+        "無法完成課綱規劃，請確認檔案格式或貼上課綱文字後再試。"
       );
     } finally {
-      submitBtn.disabled = false;
+      if (request === syllabusRequest) {
+        clearSyllabusStageTimer();
+        submitBtn.disabled = false;
+      }
     }
   });
 

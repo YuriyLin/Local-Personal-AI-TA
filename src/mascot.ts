@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 const ASSETS_DIR = path.resolve(process.cwd(), 'aita', 'web', 'assets');
 
 export interface MascotClipSpec {
-  id: 'readerIdle' | 'tutorWelcome' | 'tutorThinking' | 'libraryIdle';
+  id: 'readerIdle' | 'tutorWelcome' | 'tutorThinking' | 'libraryIdle' | 'syllabusScan';
   sourceFile: string;
   mimeType: string;
   outputFile: string;
@@ -41,13 +41,17 @@ export const MASCOT_CLIPS: MascotClipSpec[] = [
   },
   {
     id: 'tutorThinking',
-    sourceFile: 'biibo-tutor-welcome.jpg',
+    sourceFile: 'biibo-tutor-thinking.jpg',
     mimeType: 'image/jpeg',
     outputFile: 'biibo-tutor-thinking.mp4',
     prompt:
-      'Use the first image as the exact First Frame (starting frame) and the second identical image as the exact Last Frame (ending frame) so the animation returns seamlessly to the exact initial pose on the final frame with zero loop jump. ' +
-      'Static camera, locked shot, no camera movement. The cute pastel mint-green and lavender 3D creature nods gently and sways slightly from side to side as if thinking and listening attentively, blinking its eyes softly with a warm, helpful expression. ' +
-      'Tiny antennae wiggle subtly. Keep the background completely still and clean. Smooth seamless loop.',
+      'Strict 2-frame keyframe interpolation: use the first image as the exact pixel-locked First Frame (at 0.0s) and the second identical image as the exact pixel-locked Last Frame (at 4.0s) so the video returns seamlessly to the exact starting pose on the final frame with zero loop jump. ' +
+      'Static camera, locked tripod shot, zero camera movement, no pan, no zoom. ' +
+      'Animate this cute pastel mint-green and lavender fuzzy 3D mascot in an adorable thoughtful pondering motion: ' +
+      'its body and head gently tilt about 8 to 10 degrees to the right in curious thought while keeping its raised short hand resting gently near its mouth and cheek in a chin-resting pondering pose and its other short hand resting naturally at its side. ' +
+      'Its two tiny antennae on top of its head sway gently in an alternating back-and-forth rhythm like tiny signal-receiving antennas, while the glowing pastel mint-green and butter-yellow tips softly pulse with delicate warm light. ' +
+      'Add one gentle natural eye blink and soft breathing, then smoothly tilt back to the exact initial pose before the final frame. ' +
+      'Keep the soft pastel lavender background, lighting, and floor shadow 100% still and unchanged.',
   },
   {
     id: 'libraryIdle',
@@ -60,6 +64,20 @@ export const MASCOT_CLIPS: MascotClipSpec[] = [
       'The cute pastel mint-green and lavender 3D creature stands calmly beside the two neat stacks of pastel hardcover books on the clean solid off-white background, holding its tiny butter-yellow cloud. ' +
       'It gently breathes in place with a soft subtle float, blinks its eyes warmly once, and delicately wiggles its glowing butter-yellow antennae and tiny side wings. ' +
       'Keep both stacks of books, lighting, floor shadows, and off-white background completely still and unchanged. Smooth, calm, cute 3D seamless loop.',
+  },
+  {
+    id: 'syllabusScan',
+    sourceFile: 'biibo-syllabus-scan.jpg',
+    mimeType: 'image/jpeg',
+    outputFile: 'biibo-syllabus-scan.mp4',
+    prompt:
+      'Strict 2-frame keyframe interpolation: use the first image as the exact pixel-locked First Frame (at 0.0s) and the second identical image as the exact pixel-locked Last Frame (at 4.0s) so the animation returns seamlessly to the exact starting frame with zero jump when looping infinitely. ' +
+      'Static camera, locked tripod shot, zero camera movement, no pan, no zoom, no framing shift. ' +
+      'Animate this cute pastel mint-green and lavender fuzzy 3D mascot eagerly scanning its mini open cream-white book: ' +
+      'keep both short hands holding the open mini cream-white book steady in front of its chest while the tiny white pages flutter subtly as if speed-reading slides. ' +
+      'Its dark glossy eyes dart rapidly left and right across the open pages in focused speed-reading motion with one quick blink. ' +
+      'Tiny glowing pastel mint-green and butter-yellow knowledge light particles drift smoothly upward out of the open book pages and get drawn into the two glowing antennae tips on top of its head, making the antennae gently wiggle and pulse softly with warm light as they absorb knowledge. ' +
+      'Return smoothly to the exact initial pose and sparkle positions before the final frame. Keep the clean pastel lavender background, soft lighting, and floor shadow 100% still and unchanged.',
   },
 ];
 

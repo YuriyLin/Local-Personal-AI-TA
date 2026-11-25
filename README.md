@@ -1,60 +1,190 @@
-# BIIBO · Local Personal AI TA
+# BIIBO · Local Personal AI Tutor
 
-[繁體中文](aita/README.md)
+**English** | [繁體中文](aita/README.md)
 
-BIIBO is a personal study assistant and course reader for graduate students. Open a PDF, select a passage, and ask for a hint, a concept explanation, or debugging guidance. Follow the answer’s sources back to the course material or your notes.
+> **A local-first personal AI tutor and course workspace for students and researchers** — uniting PDF reading, MinerU structured parsing, automated syllabus planning, page-cited Socratic Q&A, Markdown/KaTeX note-taking, and self-test quizzes on your own machine.
 
-## What you can do
+BIIBO solves the fragmented study workflow where lecture slides, PDFs, notes, and AI chats live in disconnected tools. Everything stays organized by course and physical PDF page, with every answer and quiz question grounded in clickable citations back to the original material.
 
-- Browse the library at `/library`, search by title or summary, organize materials in folders, and pick up where you left off.
-- Switch between the original PDF and parsed content on the same physical page. Ask about a page or selection. Highlight or underline text in four colors.
-- Write Markdown notes with a live preview and save passages or tutor replies to them. Saved notes are searchable by the tutor. Export conversations as JSON or Markdown.
-- Generate a weekly course plan from a syllabus, preview a week, draft notes from a document, and take a source-linked quiz.
-- Use Traditional Chinese or English for the interface and choose the tutor’s response language separately.
+---
 
-## Start on Windows
+## Highlights & Demo
 
-Install Node.js 24, Bun and Ollama. With Ollama running, open PowerShell at the repository root and run:
+### 1. Unified Three-Pane Workspace & Course Library
 
-```powershell
+Browse all courses and materials in `/library` with instant search and type filtering, then open the three-pane workspace to navigate weekly course folders, read original PDFs or parsed content on the exact same physical page, highlight in four colors, and chat with BIIBO side by side.
+
+**Study Workspace**
+
+![BIIBO Workspace](docs/demo/workspace.png)
+
+**Material Library (`/library`)**
+
+![BIIBO Material Library](docs/demo/library.png)
+
+### 2. Automated Syllabus Planning & Weekly Pre-Class Preview
+
+Upload a syllabus (PDF, screenshot, clipboard image `Ctrl+V`/`Cmd+V`, Markdown, or TXT) to run BIIBO's **3-stage automated pipeline** (`MinerU parsing → LLM planning → weekly folders & pinned overview note`). BIIBO adapts flexibly to any course schedule—skipping empty slide folders for holidays, exams, or peer-review weeks—and lets you trigger one-click weekly pre-class previews with KaTeX math summaries.
+
+![Automated Syllabus Overview & Weekly Preview](docs/demo/syllabus-preview.png)
+
+### 3. Page-Cited AI Tutor (Socratic Hints, Concepts & Debugging)
+
+Click **Ask this page** or highlight any passage to ask BIIBO in **Hint**, **Concept**, or **Debug** mode. Responses include numbered inline citations (`S1`, `S2`, ...) that jump straight to the exact PDF page, expandable source excerpts, and one-click saving into your personal notes.
+
+| Thinking Progress Display | Grounded Citations & Excerpts |
+| :---: | :---: |
+| ![Thinking Progress Display](docs/demo/ask-ai-thinking.png) | ![Grounded Answer with Clickable Page Citations](docs/demo/ask-ai-citations.png) |
+
+### 4. Markdown + KaTeX Personal Notes & AI Draft Assistant
+
+Write notes alongside your PDF in **Edit**, **Split**, or **Preview** mode with full Markdown and LaTeX (`$...$` / `$$...$$`) support. Use **Draft with BIIBO** to generate structured summaries, formula sheets, or comparison tables from either the current page or the full document (evenly page-sampled for long PDFs), preview the result, and insert or append it into your notes. Saved notes are indexed for future tutor retrieval.
+
+![Side-by-Side PDF Reader and AI Note Draft](docs/demo/note-draft.png)
+
+### 5. Focused Self-Test Q&A & Weak-Spot Review
+
+Generate 3- or 5-question quizzes from the current page or the entire PDF. Each question comes with step-by-step hints, instant explanations, and clickable page jumps (automatically pausing and preserving your quiz progress while you review the slide). After finishing, clip missed questions to your notes or launch a targeted weak-spot session with BIIBO.
+
+| Interactive Quiz with Source Jump | Quiz Summary & Weak-Spot Handoff |
+| :---: | :---: |
+| ![Interactive Self-Test Quiz](docs/demo/socratic-quiz.png) | ![Quiz Results and Concepts to Review](docs/demo/quiz-result.png) |
+
+### 6. Multi-Engine AI Support & Local-First Privacy
+
+Choose your preferred AI engine directly in **Settings**, with independent UI language and tutor response language (Traditional Chinese / English):
+
+| Category | Supported Engines |
+| :--- | :--- |
+| **Local Models** | **Ollama** (default), **LM Studio** |
+| **Local CLI** | **Antigravity CLI**, **Claude Code**, **Codex CLI** (uses your local CLI login; supports reasoning effort & Fast mode) |
+| **Cloud API** | **Gemini**, **OpenAI**, **Claude**, **OpenCode**, **DeepSeek**, **OpenRouter** |
+
+All documents, folders, notes, conversations, and course plans are persisted locally in `./data/biibo-store.json` and `./data/blobs/`.
+
+---
+
+## PDF Parsing Engine: MinerU
+
+BIIBO uses **[MinerU](https://github.com/opendatalab/MinerU)** as its primary local PDF and image parsing engine (`http://127.0.0.1:8000` by default, configurable via `AITA_MINERU_URL`).
+
+**Why MinerU?**
+- Accurately extracts multi-column academic layouts, tables, embedded figures, and LaTeX mathematical formulas into structured Markdown and page-mapped blocks.
+- Provides OCR for scanned PDFs and syllabus screenshots (`PNG` / `JPG` / `WebP` / clipboard paste).
+- If local MinerU is offline, BIIBO automatically falls back to built-in **PDF.js** text extraction for digital PDFs (you can also import a PDF together with a pre-generated MinerU ZIP bundle).
+
+### Agent Prompt: Deploy Local MinerU Automatically
+
+Copy and paste the prompt below into your local coding agent (such as **Claude Code**, **Codex CLI**, **Antigravity**, or **Cursor**) to install, launch, and verify a local MinerU HTTP service compatible with BIIBO:
+
+```text
+Please deploy a local MinerU HTTP API service on this machine for BIIBO (Local Personal AI Tutor):
+
+1. Detect my OS, Python version, and hardware acceleration (NVIDIA CUDA GPU, Apple Silicon MPS, or CPU-only) and choose the most suitable MinerU installation method (prefer `uv` or an isolated Python virtual environment).
+2. Install MinerU (`mineru[all]` or the appropriate official package for my hardware) and download any required OCR/layout models if prompted.
+3. Start the local MinerU HTTP API server bound to loopback on port 8000 (`http://127.0.0.1:8000`, e.g., `mineru-api --host 127.0.0.1 --port 8000` or the equivalent server entry point for the installed version).
+4. Verify the service is healthy by requesting `GET http://127.0.0.1:8000/openapi.json` and confirming that either `/file_parse` or `/v1/tasks` is exposed in the OpenAPI schema.
+5. Check `.env` in this repository (create from `.env.example` if missing) and ensure `AITA_MINERU_URL=http://127.0.0.1:8000` is configured.
+6. Provide me with the exact single command to restart the MinerU service in the future.
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- **Node.js 22+** (Node.js 24 recommended) and **Bun** (or `npm`)
+- **Ollama** (for local-first usage) — or any supported Local CLI / Cloud API provider
+- *(Optional)* Local **MinerU** at `http://127.0.0.1:8000` for high-accuracy PDF layout, math, table, and image OCR parsing
+
+### Installation & Run
+
+1. **Install dependencies and pull a local model** (with Ollama running):
+
+```bash
+# Using Bun (recommended)
 bun install --frozen-lockfile
 ollama pull qwen3.5:0.8b
 bun run start
 ```
 
-Open [BIIBO’s library](http://127.0.0.1:3000/library). Import a PDF, UTF-8 Markdown, or TXT file. In **Settings**, check that Ollama and your model are available. TF-IDF works without an embedding model. For Dense or Hybrid retrieval, run `ollama pull bge-m3`. BIIBO uses that embedding model automatically.
-
-| Task | Where to start |
-| --- | --- |
-| Import a PDF | BIIBO uses local MinerU at `http://127.0.0.1:8000` by default. You can also import the PDF with its MinerU results ZIP. If MinerU is unavailable, BIIBO falls back to PDF.js text extraction. Use MinerU for scanned pages and structured content such as figures and tables. |
-| Link course notes to source pages | In UTF-8 Markdown, put `<!-- page: N -->` on its own line under a section heading. Select the source PDF on import. Number pages from 1 using their physical position in the file. |
-| Ask about a course requirement | Mark the original announcement as official during import. When the retrieved sources are insufficient, confirm the rule with the instructor’s announcement. |
-| Create a study plan | Open **Import → Syllabus plan**. Upload or paste the syllabus and select **Preview syllabus**. Review the extracted week numbers, topics, and dates. Start each week with `Week N` and put additional items on separate lines. Confirm to save. The model can suggest learning objectives. Auto-file compares each material with the topics of the selected course. |
-| Review conversations | Open **Conversations** and select a title to preview the full exchange. Use the checkboxes to select items for export. |
-
-## Upgrade from Python AITA
-
-On the first run, BIIBO reads `aita/data/aita.sqlite3` in read-only mode and creates `data/biibo-store.json` with binary files in `data/blobs/`. It keeps document and chunk IDs, source pages, folders, notes, conversations, and settings. Set `AITA_DATA` to the directory containing your SQLite file if you used a custom location. If the BIIBO store already exists, it takes precedence. The two stores operate independently after the import.
-
-Back up the entire `data/` directory with BIIBO stopped. Both data directories are Git-ignored. Embeddings are rebuilt on demand. Highlights, reading position, and interface preferences are stored in your browser for each address and port. To keep those browser preferences from `127.0.0.1:8766`, close the old app and set `PORT=8766` in `.env` before launching BIIBO.
-
-## Engines and privacy
-
-Copy `.env.example` to `.env` to customize the local Ollama, LM Studio, or MinerU endpoints. The automatic library summary runs with Ollama or LM Studio when selected. Otherwise, the summary stays blank and remains editable.
-
-Use **Settings → Local CLI** to select Antigravity, Codex, or Claude Code and set the reasoning effort. BIIBO uses the CLI’s own login. Codex automatically lists detected models and their reasoning options, and provides a separate Fast mode setting. Use **Refresh models** for Codex or **Fetch models** for Antigravity. **Test connection** uses the selections currently shown in the dialog.
-
-In **Settings → Cloud API**, select a provider, enter its key, fetch the model list, and test the selected model. Saving a key writes it to the Git-ignored `data/provider-keys.json` on the server. Treat that file as a secret when backing up data. Leave the field blank to use a saved key or the provider’s environment variable. An AI request can send your question and relevant excerpts to the selected service.
-
-BIIBO listens on loopback by default. For deliberate network access, set `HOST`, `BIIBO_ACCESS_TOKEN`, and `BIIBO_PUBLIC_ORIGIN` to the exact HTTPS origin, and use a reverse proxy that preserves the public Host header. Sign in with username `biibo` and the token as the password. API clients can send the token as a Bearer credential.
-
-## Verify locally
-
-```powershell
-bun run build
-bun run test
+```bash
+# Or using npm
+npm install
+ollama pull qwen3.5:0.8b
+npm run start
 ```
 
-For a manual check, import a PDF and its ZIP, switch views on page 2, ask about that page, and click the source in the reply. Switch to **Personal notes** using the arrow keys, then save an excerpt. Refresh the browser and confirm the note and conversation can be reopened.
+2. *(Optional)* **Enable Dense / Hybrid RAG retrieval** (TF-IDF works out of the box):
 
-The reader uses [PDF.js](https://github.com/mozilla/pdf.js) and [KaTeX](https://katex.org/). The project draws design ideas from [PaperRead](https://github.com/YuriyLin/PaperRead), [OpenTutor](https://github.com/zijinz456/OpenTutor), [haiku.rag](https://github.com/ggozad/haiku.rag) and [Lucian UX/UI Prompt #039](https://lucianlabs.dev/uxui-prompt/#039).
+```bash
+ollama pull bge-m3
+```
+
+3. **Open BIIBO** in your browser:
+
+```text
+http://127.0.0.1:3000/library
+```
+
+4. *(Optional)* **Customize environment variables**:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` to adjust `HOST`, `PORT`, `OLLAMA_URL`, `LMSTUDIO_URL`, `AITA_MINERU_URL`, or server-side Cloud API keys.
+
+### Common Workflows
+
+| Task | How to do it |
+| :--- | :--- |
+| **Import PDFs or MinerU ZIPs** | Click **+ Import** in `/library` or the sidebar. Upload a PDF (parsed automatically by local MinerU with PDF.js fallback), or select both a PDF and its MinerU results `.zip`. |
+| **Plan a Course from Syllabus** | Open **Import → Syllabus plan**, upload a PDF/image, paste a screenshot (`Ctrl+V`/`Cmd+V`), or paste text, then click **Start AI planning**. BIIBO runs the 3-stage automated flow to build weekly folders and a pinned course overview note. |
+| **Link Markdown Notes to PDF Pages** | In a UTF-8 Markdown file, add `<!-- page: N -->` (1-based physical page number) on its own line below a heading, then pick the matching source PDF during import. |
+| **Mark Official Course Policies** | Check **official announcement** when importing syllabus rules or grading policies so BIIBO treats them as authoritative references. |
+| **Switch AI Engines** | Open **Settings** to switch between **Local Models** (Ollama / LM Studio), **Local CLI** (Antigravity / Claude Code / Codex), and **Cloud API**. Cloud keys entered in the UI are saved locally to the Git-ignored `data/provider-keys.json`. |
+| **Review & Export Conversations** | Open **Conversations** in the top bar to preview past threads and batch-export selected chats as **AITA JSON** or **Markdown**. |
+
+### Upgrade from Python AITA & Backups
+
+- On first startup, if `data/biibo-store.json` does not yet exist, BIIBO reads `aita/data/aita.sqlite3` (or the directory set in `AITA_DATA`) in read-only mode and migrates documents, chunks, folders, notes, conversations, and settings into `data/biibo-store.json` and `data/blobs/`.
+- Stop BIIBO and back up the entire `data/` directory to preserve your library (keep `data/provider-keys.json` private).
+- To keep browser preferences (highlights and reading positions) from a previous `127.0.0.1:8766` setup, set `PORT=8766` in `.env` before starting.
+
+### Network Access & Security
+
+BIIBO binds to loopback (`127.0.0.1`) by default for single-user local security. If you intentionally expose it over a network, set `HOST`, `BIIBO_ACCESS_TOKEN`, and the exact HTTPS `BIIBO_PUBLIC_ORIGIN` behind a reverse proxy that preserves the public `Host` header (sign in with username `biibo` and your token as password, or pass `Authorization: Bearer <token>`).
+
+### Local Verification
+
+```bash
+bun run build
+bun run test
+# or: npm run build && npm test
+```
+
+---
+
+## Contributing & License
+
+Contributions, bug reports, and feature ideas are warmly welcome!
+
+### How to Contribute
+
+1. Fork the repository and create a feature branch (`git checkout -b feat/your-feature`).
+2. Keep changes focused and run type-checking plus the test suite locally before opening a Pull Request:
+   ```bash
+   bun run build
+   bun run test
+   ```
+3. Open an Issue to report bugs (please include OS, Node/Bun version, AI engine used, and reproduction steps) or discuss larger architectural changes before implementing.
+
+### Acknowledgments
+
+Built with [PDF.js](https://github.com/mozilla/pdf.js), [KaTeX](https://katex.org/), and [MinerU](https://github.com/opendatalab/MinerU). Inspired by [OpenTutor](https://github.com/zijinz456/OpenTutor) and [haiku.rag](https://github.com/ggozad/haiku.rag).
+
+### License
+
+This project is open source under the **MIT License**.

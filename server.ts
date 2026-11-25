@@ -44,14 +44,15 @@ const KATEX_DIR = path.join(ROOT, 'node_modules', 'katex', 'dist');
 const PDFJS_DIR = path.join(ROOT, 'node_modules', 'pdfjs-dist');
 
 const PORT = Number(process.env.PORT) || 3000;
-const HOST = process.env.HOST || '127.0.0.1';
+const isPreviewRuntime = Boolean(process.env.K_SERVICE);
+const HOST = process.env.HOST || (isPreviewRuntime ? '0.0.0.0' : '127.0.0.1');
 const API_ACCESS_TOKEN = process.env.BIIBO_ACCESS_TOKEN?.trim() || '';
 const publicOrigin = process.env.BIIBO_PUBLIC_ORIGIN ? new URL(process.env.BIIBO_PUBLIC_ORIGIN) : null;
 const loopbackHosts = ['127.0.0.1', 'localhost', '::1'];
 if (publicOrigin && (publicOrigin.protocol !== 'https:' || publicOrigin.origin !== publicOrigin.href.replace(/\/$/, ''))) {
   throw new Error('BIIBO_PUBLIC_ORIGIN must be an HTTPS origin without a path.');
 }
-if (!loopbackHosts.includes(HOST) && (!API_ACCESS_TOKEN || !publicOrigin)) {
+if (!isPreviewRuntime && !loopbackHosts.includes(HOST) && (!API_ACCESS_TOKEN || !publicOrigin)) {
   throw new Error('Non-loopback binding requires BIIBO_ACCESS_TOKEN and BIIBO_PUBLIC_ORIGIN. Use an HTTPS reverse proxy.');
 }
 const localOrigins = new Set(loopbackHosts.map((host) => new URL(`http://${host === '::1' ? '[::1]' : host}:${PORT}`).origin));
@@ -62,7 +63,8 @@ const app = express();
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (!allowedHosts.has(req.get('host')?.toLowerCase() || '')) {
+  const reqHost = req.get('host')?.toLowerCase() || '';
+  if (!isPreviewRuntime && !allowedHosts.has(reqHost)) {
     res.sendStatus(403);
     return;
   }
@@ -72,7 +74,7 @@ app.use((req, res, next) => {
 const expectedToken = Buffer.from(API_ACCESS_TOKEN, 'utf-8');
 app.use((req, res, next) => {
   const origin = req.get('origin');
-  if (origin && !origins.has(origin)) {
+  if (!isPreviewRuntime && origin && !origins.has(origin)) {
     res.sendStatus(403);
     return;
   }

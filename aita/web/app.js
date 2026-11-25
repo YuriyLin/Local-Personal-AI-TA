@@ -210,7 +210,7 @@ function showTurns() {
   if (!state.turns.length) {
     const welcome = element("div", undefined, "empty-chat-card");
     const art = element("div", undefined, "empty-art empty-art-tutor");
-    art.append(createMascotVideo("/static/assets/biibo-tutor-welcome.mp4?v=2", "/static/assets/biibo-tutor-welcome.jpg", "BIIBO"));
+    art.append(createMascotVideo("/static/assets/biibo-tutor-welcome.mp4?v=3", "/static/assets/biibo-tutor-welcome.jpg", "BIIBO"));
     const chips = element("div", undefined, "prompt-chips");
     chips.id = "prompt-chips";
     chips.setAttribute("role", "group");
@@ -320,7 +320,7 @@ function mountPendingTurn(questionText) {
   const stages = element("div", undefined, "thinking-stages");
   const mascotFrame = element("div", undefined, "thinking-mascot-frame");
   mascotFrame.setAttribute("aria-hidden", "true");
-  mascotFrame.append(createMascotVideo("/static/assets/biibo-tutor-thinking.mp4", "/static/assets/biibo-mascot.png"));
+  mascotFrame.append(createMascotVideo("/static/assets/biibo-tutor-thinking.mp4?v=2", "/static/assets/biibo-tutor-thinking.jpg"));
   const stageBody = element("div", undefined, "thinking-stage-body");
   const dots = element("span", undefined, "thinking-dots");
   dots.setAttribute("aria-hidden", "true");

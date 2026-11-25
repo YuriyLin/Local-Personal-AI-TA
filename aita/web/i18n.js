@@ -347,11 +347,9 @@ BIIBO 幫你寫草稿|Draft with BIIBO
 歸檔分類（選填）|Target folder (optional)
 上傳課程大綱 · AI 初步規劃|Upload Syllabus · AI Planning
 開始 AI 規劃|Start AI planning
-預覽課綱|Preview syllabus
-核對原文、週次與日期。可直接編輯，每週從「Week N」開始，同週的其他項目另起一行。|Review the text, week numbers and dates. Edit in place. Start each week with “Week N” and give additional items their own line.
-擷取課綱原文與週次|Extract source text and week numbers
-核對並確認課綱|Review and confirm the syllabus
-儲存規劃與總覽筆記|Save the plan and overview note
+讀取課綱內容（支援 PDF、截圖與純文字）|Read syllabus content (PDF, images, or text)
+依課綱整理單元、授課分類與考試時程|Organize units, lecture folders, and exam dates
+建立分類資料夾與置頂課程總覽筆記|Create course folders and pinned overview note
 選擇課綱檔案或拖曳至此|Choose syllabus file or drag here
 課後自測 Q&A|Self-Test Q&A
 測驗範圍|Quiz scope
@@ -377,7 +375,6 @@ BIIBO 幫你寫草稿|Draft with BIIBO
 選擇檔案、圖片或拖曳至此|Choose file, image, or drag here
 支援 PDF、PNG/JPG/WebP 截圖、Markdown、TXT|Supports PDF, PNG/JPG/WebP images, Markdown, TXT
 或直接貼上課綱文字／剪貼簿截圖（Ctrl+V / Cmd+V）|Or paste syllabus text / clipboard screenshot (Ctrl+V / Cmd+V)
-貼上剪貼簿圖片|Paste clipboard image
 移除圖片|Remove image
 由 BIIBO 幫你出題，卡關可先看解題提示，並附上原文頁碼；中途跳回講義對照時會自動保留作答進度。|BIIBO creates the quiz for you with step-by-step hints and source page references; jumping back to the slides automatically saves your progress.
 上傳 PDF 或課綱截圖後，由 BIIBO 讀取內容並建立授課週次分類與置頂總覽筆記；放假、純考試與互評週會自動略過空資料夾，不誤報缺講義。|Upload a PDF or syllabus screenshot and BIIBO will organize lecture folders and a pinned course overview—while automatically skipping holidays, exams, and review weeks.

@@ -238,7 +238,7 @@
           <div class="empty-chat-card">
             <div class="empty-art empty-art-tutor">
               <video class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-tutor-welcome.jpg" aria-label="BIIBO 微笑歡迎提問">
-                <source src="/static/assets/biibo-tutor-welcome.mp4?v=2" type="video/mp4">
+                <source src="/static/assets/biibo-tutor-welcome.mp4?v=3" type="video/mp4">
               </video>
             </div>
             <h3>開始與 BIIBO 一起學習</h3>
@@ -442,12 +442,8 @@
           <span class="file-picker-meta" id="syllabus-file-name">支援 PDF、PNG/JPG/WebP 截圖、Markdown、TXT</span>
         </span>
       </label>
-      <div class="syllabus-text-head">
-        <label for="syllabus-text">或直接貼上課綱文字／剪貼簿截圖（Ctrl+V / Cmd+V）</label>
-        <button type="button" id="syllabus-paste-btn" class="syllabus-paste-btn">貼上剪貼簿圖片</button>
-      </div>
-      <textarea id="syllabus-text" rows="5" maxlength="80000" aria-describedby="syllabus-review-hint" placeholder="Week 1 課程介紹&#10;Week 2 閱讀與討論&#10;Week 3 期中考"></textarea>
-      <p id="syllabus-review-hint" class="small" hidden>核對原文、週次與日期。可直接編輯，每週從「Week N」開始，同週的其他項目另起一行。</p>
+      <label for="syllabus-text">或直接貼上課綱文字／剪貼簿截圖（Ctrl+V / Cmd+V）</label>
+      <textarea id="syllabus-text" rows="5" maxlength="80000" placeholder="Week 1 課程介紹&#10;Week 2 閱讀與討論&#10;Week 3 期中考"></textarea>
       <div id="syllabus-image-preview" class="syllabus-image-preview" hidden>
         <img id="syllabus-preview-img" class="syllabus-preview-thumb" alt="課綱圖片預覽">
         <div class="syllabus-preview-info">
@@ -456,15 +452,22 @@
         </div>
         <button type="button" id="syllabus-preview-clear" class="syllabus-preview-clear">移除圖片</button>
       </div>
-      <ol id="syllabus-stages" class="syllabus-stages" hidden>
-        <li data-stage="1">擷取課綱原文與週次</li>
-        <li data-stage="2">核對並確認課綱</li>
-        <li data-stage="3">儲存規劃與總覽筆記</li>
-      </ol>
+      <div id="syllabus-stages" class="syllabus-stages">
+        <ol class="syllabus-stage-list">
+          <li data-stage="1">讀取課綱內容（支援 PDF、截圖與純文字）</li>
+          <li data-stage="2">依課綱整理單元、授課分類與考試時程</li>
+          <li data-stage="3">建立分類資料夾與置頂課程總覽筆記</li>
+        </ol>
+        <div class="syllabus-stage-art" aria-hidden="true">
+          <video id="syllabus-stage-video" class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-syllabus-scan.jpg">
+            <source src="/static/assets/biibo-syllabus-scan.mp4" type="video/mp4">
+          </video>
+        </div>
+      </div>
       <p id="syllabus-status" role="status"></p>
       <div class="actions">
         <button type="button" data-close>關閉</button>
-        <button type="submit" id="syllabus-submit" class="primary">預覽課綱</button>
+        <button type="submit" id="syllabus-submit" class="primary">開始 AI 規劃</button>
       </div>
     </form>
     </section>
@@ -639,7 +642,7 @@
       <div id="quiz-loading" class="quiz-loading" hidden>
         <div class="quiz-loading-art" aria-hidden="true">
           <video class="mascot-video" autoplay loop muted playsinline poster="/static/assets/biibo-tutor-thinking.jpg">
-            <source src="/static/assets/biibo-tutor-thinking.mp4" type="video/mp4">
+            <source src="/static/assets/biibo-tutor-thinking.mp4?v=2" type="video/mp4">
           </video>
         </div>
         <p id="quiz-loading-text" class="quiz-loading-text">BIIBO 正在閱讀教材並為你設計自測題…</p>
