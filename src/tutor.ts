@@ -1,7 +1,15 @@
-import { createHash } from 'node:crypto';
 import { ChatMessage, getEngineDescriptor, LlmError, OLLAMA_URL, parseJsonFromLlm, runChatCompletion } from './llm.js';
 import { ChunkRecord, CoursePlanRecord, ModelProvider, store } from './store.js';
-import { DEFAULT_RUNTIME, inputByteBudget, PROMPT_RESERVE_BYTES, requestByteEstimate, type RuntimeSettings } from './runtime.js';
+import {
+  DEFAULT_EVIDENCE_RATIO,
+  DEFAULT_RUNTIME,
+  inputByteBudget,
+  passageByteCap,
+  PROMPT_RESERVE_BYTES,
+  requestByteEstimate,
+  type RuntimeSettings,
+} from './runtime.js';
+import { scheduleVectorCacheSave, scoreDenseVectors, setVector, vectorKeyFor } from './vectorStore.js';
 
 export { OLLAMA_URL };
 export const EMBED_MODEL = 'bge-m3';
@@ -133,6 +141,10 @@ function charNgramCounts(text: string): Map<string, number> {
 const chunkNgramCache = new Map<string, Map<string, number>>();
 const MAX_NGRAM_CACHE = 4000;
 
+export function clearRetrievalCaches(): void {
+  chunkNgramCache.clear();
+}
+
 function getChunkNgrams(row: EvidenceRow): Map<string, number> {
   const key = JSON.stringify([row.id, row.section, row.text]);
   let cached = chunkNgramCache.get(key);
@@ -195,12 +207,12 @@ function scoreNgrams(docCounts: Map<string, number>[], query: string): number[] 
   });
 }
 
-function ranked(scores: number[], minimum: number): Array<[number, number]> {
+function ranked(scores: number[], minimum: number, maxCandidates = 24): Array<[number, number]> {
   return scores
     .map((score, idx): [number, number] => [idx, score])
     .filter(([, score]) => score >= minimum)
     .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-    .slice(0, 8);
+    .slice(0, maxCandidates);
 }
 
 async function vectorize(texts: string[]): Promise<Float32Array[]> {
@@ -226,37 +238,41 @@ async function vectorize(texts: string[]): Promise<Float32Array[]> {
   });
 }
 
-async function denseScores(rows: EvidenceRow[], query: string): Promise<number[]> {
+async function denseScores(
+  rows: EvidenceRow[],
+  query: string,
+  extraCandidateIndices?: Iterable<number>
+): Promise<number[]> {
   const res = await fetch(`${OLLAMA_URL}/api/tags`, { redirect: 'manual', signal: AbortSignal.timeout(2500) });
   if (!res.ok) throw new Error('Ollama unavailable');
   const data = (await res.json()) as { models?: Array<{ name?: string; digest?: string }> };
   const model = (data.models || []).find((m) => m.name === EMBED_MODEL || m.name === `${EMBED_MODEL}:latest`);
   if (!model?.digest) throw new Error('尚未下載 bge-m3。');
   const digest = model.digest;
-  const vectorKey = (row: EvidenceRow) => `${digest}:${row.id}:${createHash('sha256').update(JSON.stringify([row.section, row.text])).digest('hex')}`;
+  const keys = rows.map((r) => vectorKeyFor(digest, r.id, r.section, r.text));
 
-  const missing = rows.filter((r) => !store.vectors.has(vectorKey(r)));
-  for (let i = 0; i < missing.length; i += 24) {
-    const batch = missing.slice(i, i + 24);
-    const vecs = await vectorize(batch.map((r) => `${r.section}\n${r.text}`));
-    batch.forEach((r, idx) => store.vectors.set(vectorKey(r), vecs[idx]));
+  const missingIndices: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (!store.vectors.has(keys[i])) missingIndices.push(i);
+  }
+  for (let i = 0; i < missingIndices.length; i += 24) {
+    const batchIndices = missingIndices.slice(i, i + 24);
+    const vecs = await vectorize(batchIndices.map((idx) => `${rows[idx].section}\n${rows[idx].text}`));
+    batchIndices.forEach((rowIdx, idx) => setVector(keys[rowIdx], vecs[idx]));
+  }
+  if (missingIndices.length > 0) {
+    scheduleVectorCacheSave();
   }
 
   const [qVec] = await vectorize([query]);
-  return rows.map((r) => {
-    const v = store.vectors.get(vectorKey(r));
-    if (!v || v.length !== qVec.length) return 0;
-    let dot = 0;
-    for (let i = 0; i < v.length; i++) dot += v[i] * qVec[i];
-    return dot;
-  });
+  return scoreDenseVectors(keys, qVec, { extraCandidateIndices }).scores;
 }
 
 export async function retrieve(
   rows: EvidenceRow[],
   query: string,
   method: 'tfidf' | 'dense' | 'hybrid' = 'tfidf',
-  limit = 3,
+  limit = 4,
   sparseMin = 0.09,
   denseMin = 0.48
 ): Promise<{ hits: EvidenceRow[]; method: 'tfidf' | 'dense' | 'hybrid'; warning: string | null }> {
@@ -264,13 +280,15 @@ export async function retrieve(
     return { hits: [], method, warning: null };
   }
 
-  const sparse = method !== 'dense' ? ranked(tfidfScores(rows, query), sparseMin) : [];
+  const candidateLimit = Math.max(24, limit * 2);
+  const sparse = method !== 'dense' ? ranked(tfidfScores(rows, query), sparseMin, candidateLimit) : [];
   let dense: Array<[number, number]> = [];
   let warning: string | null = null;
 
   if (method !== 'tfidf') {
     try {
-      dense = ranked(await denseScores(rows, query), denseMin);
+      const lexicalHints = method === 'hybrid' ? sparse.map(([idx]) => idx) : undefined;
+      dense = ranked(await denseScores(rows, query, lexicalHints), denseMin, candidateLimit);
     } catch {
       const fallback = await retrieve(rows, query, 'tfidf', limit, sparseMin, denseMin);
       return {
@@ -406,7 +424,7 @@ function buildPrompt(
   mode: 'hint' | 'concept' | 'debug' | 'ask',
   quote: string,
   language: 'zh-Hant' | 'en',
-  runtime: RuntimeSettings & { input_limit?: number | null }
+  runtime: RuntimeSettings & { input_limit?: number | null; max_passage_bytes?: number }
 ) {
   const system =
     language === 'en'
@@ -440,7 +458,15 @@ function buildPrompt(
   let evidenceBytes = 0;
   const baseBytes = Buffer.byteLength(system + questionContext, 'utf-8');
   const totalBudget = inputByteBudget(runtime.context, runtime.output, runtime.input_limit);
-  const cap = Math.min(Math.floor(totalBudget * 0.55), totalBudget - baseBytes - PROMPT_RESERVE_BYTES);
+  const evidenceRatio =
+    typeof runtime.evidence_ratio === 'number' && Number.isFinite(runtime.evidence_ratio)
+      ? Math.min(0.8, Math.max(0.5, runtime.evidence_ratio))
+      : DEFAULT_EVIDENCE_RATIO;
+  const maxPassageBytes =
+    typeof runtime.max_passage_bytes === 'number' && runtime.max_passage_bytes >= 600
+      ? runtime.max_passage_bytes
+      : passageByteCap(runtime.context);
+  const cap = Math.min(Math.floor(totalBudget * evidenceRatio), totalBudget - baseBytes - PROMPT_RESERVE_BYTES);
 
   const sources = groupPageEvidence(hits);
   for (let i = 0; i < sources.length; i++) {
@@ -450,7 +476,7 @@ function buildPrompt(
     const previous = evidence.at(-1)?.row;
     const sameSection = previous?.document_id === hit.document_id && previous.section === hit.section;
     const header = sameSection && !noteLabel ? `[${citation}] ` : `[${citation}] ${noteLabel}${hit.section.slice(0, 80)}\n`;
-    const allowance = Math.min(1200, cap - evidenceBytes);
+    const allowance = Math.min(maxPassageBytes, cap - evidenceBytes);
     if (allowance < 180) break;
     const excerptBudget = allowance - Buffer.byteLength(header, 'utf-8');
     const anchorText = hits.find(row => row.id === hit.id)?.text.trim() || '';
@@ -549,13 +575,13 @@ export async function generateAnswer(params: {
   model: string;
   quote?: string;
   language?: 'zh-Hant' | 'en';
-  runtime?: RuntimeSettings & { input_limit?: number | null; can_disable_thinking?: boolean | null };
+  runtime?: RuntimeSettings & { input_limit?: number | null; can_disable_thinking?: boolean | null; max_passage_bytes?: number };
 }): Promise<TutorReply> {
   const { question, history, hits, mode, model, quote = '', language = 'zh-Hant' } = params;
   const provider: ModelProvider = params.provider || store.settings.provider || 'ollama';
   const safeHits = hits.filter(hit => !isQuestionOptionEvidence(hit));
   const excludedQuestions = safeHits.length !== hits.length;
-  const runtime: RuntimeSettings & { input_limit?: number | null; can_disable_thinking?: boolean | null } = params.runtime || DEFAULT_RUNTIME;
+  const runtime: RuntimeSettings & { input_limit?: number | null; can_disable_thinking?: boolean | null; max_passage_bytes?: number } = params.runtime || DEFAULT_RUNTIME;
   const { messages, evidence, historyTruncated, budgetTooSmall } = buildPrompt(question, history, safeHits.length ? safeHits : hits, mode, excludedQuestions ? '' : quote, language, runtime);
   const insufficient = language === 'en' ? INSUFFICIENT_EN : INSUFFICIENT_ZH;
   const questionWarning = excludedQuestions ? (language === 'en'

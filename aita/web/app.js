@@ -906,70 +906,403 @@ async function loadPreferences() {
   $("model").replaceChildren(new Option(p.model, p.model));
   $("retriever").value = p.retriever;
   $("response-language").value = p.language;
-  const runtime = p.runtime || { mode: "auto", context: 4096, output: 512, top_k: 3, temperature: 0 };
-  $("runtime-mode").value = runtime.mode;
-  for (const [id, key] of [["context", "context"], ["output", "output"], ["top-k", "top_k"], ["temperature", "temperature"]]) $("runtime-" + id).value = runtime[key];
+  const runtime = p.runtime || { mode: "auto", context: 4096, output: 512, top_k: 4, temperature: 0, evidence_ratio: 0.7 };
+  applySavedRuntimeState(runtime);
   syncRuntimeFields();
   checkModelStatus();
 }
 
+const RUNTIME_BASE_TICKS = [2048, 4096, 8192, 16384, 32768, 65536];
+const RUNTIME_OUTPUT_PRESETS = [512, 1024, 2048, 4096];
+
 let runtimeRequest = 0;
-let detectedRuntimeLimit = null;
-let detectedOutputLimit = null;
-function syncRuntimeFields() {
-  const disabled = $("runtime-mode").value !== "advanced";
-  for (const id of ["context", "output", "top-k", "temperature"]) {
-    const input = $("runtime-" + id);
-    input.disabled = disabled;
-    const autoContext = Math.min(4096, detectedRuntimeLimit || 4096);
-    const autoValue = { context: autoContext, output: Math.min(512, Math.floor(autoContext / 2), detectedOutputLimit || 512), "top-k": "自動 2–5", temperature: 0 };
-    $("runtime-" + id + "-value").textContent = disabled ? String(autoValue[id]) : input.value;
+let runtimeCapabilities = {
+  provider_group: "local",
+  context_limit: null,
+  input_limit: null,
+  output_limit: null,
+  known_context_limit: null,
+  known_output_limit: null,
+  can_chat: null,
+  recommended: null,
+  index: null,
+};
+
+const runtimeState = {
+  mode: "auto",
+  context: 4096,
+  output: 512,
+  top_k: 4,
+  evidence_ratio: 0.7,
+  temperature: 0,
+};
+
+function applySavedRuntimeState(runtime) {
+  runtimeState.mode = runtime?.mode === "advanced" ? "advanced" : "auto";
+  runtimeState.context = Number.isInteger(runtime?.context) ? runtime.context : 4096;
+  runtimeState.output = Number.isInteger(runtime?.output) ? runtime.output : 512;
+  runtimeState.top_k = Number.isInteger(runtime?.top_k) ? Math.min(16, Math.max(1, runtime.top_k)) : 4;
+  runtimeState.evidence_ratio = typeof runtime?.evidence_ratio === "number" && Number.isFinite(runtime.evidence_ratio)
+    ? Math.min(0.8, Math.max(0.5, runtime.evidence_ratio))
+    : 0.7;
+  runtimeState.temperature = typeof runtime?.temperature === "number" && Number.isFinite(runtime.temperature)
+    ? Math.min(1, Math.max(0, runtime.temperature))
+    : 0;
+  $("runtime-mode").value = runtimeState.mode;
+}
+
+function runtimeEffectiveLimits() {
+  const c = runtimeCapabilities;
+  const ctxParts = [c.context_limit, c.input_limit, c.known_context_limit].filter(n => typeof n === "number" && n > 0);
+  const outParts = [c.output_limit, c.known_output_limit].filter(n => typeof n === "number" && n > 0);
+  return {
+    contextCeiling: ctxParts.length ? Math.min(...ctxParts) : null,
+    outputCeiling: outParts.length ? Math.min(...outParts) : null,
+    detectedContext: c.context_limit || c.input_limit || null,
+  };
+}
+
+function runtimeContextTicks() {
+  const { contextCeiling } = runtimeEffectiveLimits();
+  if ((contextCeiling && contextCeiling < 2048) || runtimeState.context < 2048) {
+    return [1024, ...RUNTIME_BASE_TICKS];
   }
-  const output = $("runtime-output");
-  const providerMax = detectedOutputLimit ? Math.max(128, Math.floor(detectedOutputLimit / 128) * 128) : 2048;
-  output.max = String(Math.min(2048, providerMax, Math.floor(Number($("runtime-context").value) / 256) * 128));
-  if (Number(output.value) > Number(output.max)) output.value = output.max;
-  if (!disabled) $("runtime-output-value").textContent = output.value;
+  return RUNTIME_BASE_TICKS;
+}
+
+function formatTokenTick(val) {
+  return val >= 1024 && val % 1024 === 0 ? `${val / 1024}K` : String(val);
+}
+
+function closestTickIndex(ticks, value, maxAllowed) {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < ticks.length; i++) {
+    if (maxAllowed !== null && ticks[i] > maxAllowed) continue;
+    const dist = Math.abs(ticks[i] - value);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+function setSliderFill(slider) {
+  const min = Number(slider.min) || 0;
+  const max = Number(slider.max) || 1;
+  const val = Number(slider.value) || 0;
+  const pct = max > min ? ((val - min) / (max - min)) * 100 : 0;
+  slider.style.setProperty("--slider-pct", `${pct}%`);
+}
+
+function renderRuntimeStatusLine() {
+  const note = $("runtime-capability");
+  if (!note) return;
+  const model = getSelectedModelValue();
+  const isEn = english();
+  if (!model) {
+    note.textContent = isEn ? "Select a model to view adaptive limits." : "請先選擇模型以檢視自適應上限。";
+    note.classList.remove("is-warn");
+    return;
+  }
+
+  const c = runtimeCapabilities;
+  const group = c.provider_group || state.draftGroup || "local";
+  const rec = c.recommended;
+  const parts = [];
+
+  if (runtimeState.mode === "auto") {
+    const recCtx = rec?.context || (group === "local" ? 4096 : 16384);
+    const fmtCtx = recCtx.toLocaleString("en-US");
+    if (group === "local") {
+      parts.push(isEn ? `Local safe mode · ${fmtCtx} context` : `本機安全模式 · ${fmtCtx} context`);
+    } else if (group === "cli") {
+      parts.push(isEn ? `Local CLI adaptive · ${fmtCtx} context` : `本機 CLI 自適應 · ${fmtCtx} context`);
+    } else {
+      parts.push(isEn ? `Cloud adaptive · Scales to model limit (${fmtCtx} context)` : `雲端自適應 · 依模型上限調整（${fmtCtx} context）`);
+    }
+  } else {
+    const detected = c.context_limit || c.input_limit;
+    if (detected) {
+      parts.push(isEn ? `Detected limit: ${detected.toLocaleString("en-US")} tokens` : `偵測上限 ${detected.toLocaleString("en-US")} tokens`);
+    } else if (c.known_context_limit) {
+      parts.push(isEn ? `Model window: ${c.known_context_limit.toLocaleString("en-US")} tokens` : `模型視窗上限 ${c.known_context_limit.toLocaleString("en-US")} tokens`);
+    } else {
+      parts.push(isEn ? "Model limit unknown · Configure for your hardware" : "模型上限未知 · 可依硬體自行調整");
+    }
+    const outLim = c.output_limit || c.known_output_limit;
+    if (outLim) {
+      parts.push(isEn ? `Max output ${outLim.toLocaleString("en-US")}` : `輸出上限 ${outLim.toLocaleString("en-US")}`);
+    }
+  }
+
+  if (c.can_chat === false) {
+    parts.push(isEn ? "Model cannot generate text" : "此模型不支援文字生成");
+  } else if (c.context_limit && c.context_limit < 1024) {
+    parts.push(isEn ? "Model limit is below minimum configurable context" : "模型上限低於最小可調值");
+  }
+
+  note.classList.toggle("is-warn", c.can_chat === false || Boolean(c.context_limit && c.context_limit < 1024));
+  note.textContent = parts.join(" · ");
+}
+
+function renderRuntimeIndexStats() {
+  const el = $("runtime-index-stats");
+  if (!el) return;
+  const idx = runtimeCapabilities.index;
+  if (!idx) {
+    el.textContent = "";
+    return;
+  }
+  const chunks = Number(idx.chunks || 0).toLocaleString("en-US");
+  const vecs = Number(idx.cached_vectors || 0).toLocaleString("en-US");
+  el.textContent = english()
+    ? `${chunks} chunks · ${vecs} cached vectors`
+    : `${chunks} 切塊 · ${vecs} 筆向量快取`;
+}
+
+function syncRuntimeFields() {
+  const isAdvanced = runtimeState.mode === "advanced";
+  $("runtime-mode").value = runtimeState.mode;
+  for (const btn of document.querySelectorAll("#runtime-mode-group [data-runtime-mode]")) {
+    btn.setAttribute("aria-pressed", String(btn.dataset.runtimeMode === runtimeState.mode));
+  }
+
+  const panel = $("runtime-advanced-panel");
+  if (panel) panel.hidden = !isAdvanced;
+
+  renderRuntimeStatusLine();
+  if (!isAdvanced) return;
+
+  const { contextCeiling, outputCeiling } = runtimeEffectiveLimits();
+  const ticks = runtimeContextTicks();
+  const slider = $("runtime-context");
+  const ticksHost = $("runtime-context-ticks");
+
+  // Clamp stored context if model ceiling is lower than current context
+  if (contextCeiling !== null && runtimeState.context > contextCeiling) {
+    const allowedTicks = ticks.filter(t => t <= contextCeiling);
+    runtimeState.context = allowedTicks.length ? allowedTicks[allowedTicks.length - 1] : Math.max(1024, contextCeiling);
+  }
+
+  slider.min = "0";
+  slider.max = String(ticks.length - 1);
+  const activeTickIdx = closestTickIndex(ticks, runtimeState.context, contextCeiling);
+  slider.value = String(activeTickIdx);
+  setSliderFill(slider);
+  $("runtime-context-value").textContent = `${runtimeState.context.toLocaleString("en-US")} tokens`;
+
+  if (ticksHost) {
+    ticksHost.style.setProperty("--tick-count", String(ticks.length));
+    const buttons = [];
+    for (let i = 0; i < ticks.length; i++) {
+      const val = ticks[i];
+      const overLimit = contextCeiling !== null && val > contextCeiling;
+      const isSelected = val === runtimeState.context || (i === activeTickIdx && !ticks.includes(runtimeState.context));
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "runtime-tick-btn runtime-mono" + (isSelected ? " is-active" : "");
+      b.textContent = formatTokenTick(val);
+      b.dataset.contextTick = String(val);
+      b.disabled = overLimit;
+      if (overLimit) {
+        b.title = english()
+          ? `Exceeds model limit (${contextCeiling.toLocaleString("en-US")} tokens)`
+          : `超出模型上限（${contextCeiling.toLocaleString("en-US")} tokens）`;
+      }
+      b.addEventListener("click", () => {
+        if (b.disabled) return;
+        runtimeState.context = val;
+        syncRuntimeFields();
+      });
+      buttons.push(b);
+    }
+    ticksHost.replaceChildren(...buttons);
+  }
+
+  // Output segmented presets: auto-disable presets above Context/2 or model output ceiling
+  const maxOutput = Math.min(4096, Math.floor(runtimeState.context / 2), outputCeiling || 4096);
+  const validOutputs = RUNTIME_OUTPUT_PRESETS.filter(v => v <= maxOutput);
+  if (runtimeState.output > maxOutput) {
+    runtimeState.output = validOutputs.length ? validOutputs[validOutputs.length - 1] : Math.max(128, Math.floor(maxOutput / 128) * 128);
+  }
+  $("runtime-output-value").textContent = runtimeState.output.toLocaleString("en-US");
+  for (const btn of document.querySelectorAll("#runtime-output-group [data-runtime-output]")) {
+    const val = Number(btn.dataset.runtimeOutput);
+    const disabled = val > maxOutput;
+    btn.disabled = disabled;
+    btn.setAttribute("aria-pressed", String(!disabled && runtimeState.output === val));
+  }
+
+  // Top-k precision stepper
+  runtimeState.top_k = Math.min(16, Math.max(1, Math.round(runtimeState.top_k || 4)));
+  const topKInput = $("runtime-top-k");
+  if (topKInput && Number(topKInput.value) !== runtimeState.top_k) {
+    topKInput.value = String(runtimeState.top_k);
+  }
+  const decBtn = $("runtime-top-k-dec");
+  const incBtn = $("runtime-top-k-inc");
+  if (decBtn) decBtn.disabled = runtimeState.top_k <= 1;
+  if (incBtn) incBtn.disabled = runtimeState.top_k >= 16;
+
+  // Evidence budget semantic segmented buttons
+  $("runtime-evidence-value").textContent = `${Math.round(runtimeState.evidence_ratio * 100)}%`;
+  for (const btn of document.querySelectorAll("#runtime-evidence-group [data-runtime-evidence]")) {
+    const val = Number(btn.dataset.runtimeEvidence);
+    btn.setAttribute("aria-pressed", String(Math.abs(runtimeState.evidence_ratio - val) < 0.01));
+  }
+
+  // Temperature semantic segmented buttons (preserves any custom stored value until user picks a tier)
+  $("runtime-temperature-value").textContent = runtimeState.temperature.toFixed(1);
+  for (const btn of document.querySelectorAll("#runtime-temperature-group [data-runtime-temp]")) {
+    const val = Number(btn.dataset.runtimeTemp);
+    btn.setAttribute("aria-pressed", String(Math.abs(runtimeState.temperature - val) < 0.005));
+  }
+
+  renderRuntimeIndexStats();
 }
 
 async function refreshRuntimeLimit() {
   const seq = ++runtimeRequest;
   const model = getSelectedModelValue();
   const provider = state.draftProvider || state.provider;
-  const note = $("runtime-capability");
   if (!model) {
-    detectedRuntimeLimit = null;
-    detectedOutputLimit = null;
-    $("runtime-context").max = "32768";
-    note.textContent = "請先選擇模型 / Select a model first";
+    runtimeCapabilities = {
+      provider_group: state.draftGroup || "local",
+      context_limit: null,
+      input_limit: null,
+      output_limit: null,
+      known_context_limit: null,
+      known_output_limit: null,
+      can_chat: null,
+      recommended: null,
+      index: runtimeCapabilities.index,
+    };
     syncRuntimeFields();
     return;
   }
   try {
     const data = await get(`/api/runtime/capabilities?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`);
     if (seq !== runtimeRequest) return;
-    detectedRuntimeLimit = data.context_limit || null;
-    detectedOutputLimit = data.output_limit || null;
-    const max = data.context_limit ? Math.max(1024, Math.min(32768, Math.floor(data.context_limit / 256) * 256)) : 32768;
-    $("runtime-context").max = String(max);
-    if (Number($("runtime-context").value) > max) $("runtime-context").value = String(max);
-    const contextNote = data.context_limit
-      ? `模型上限 / Model limit: ${data.context_limit} tokens${data.context_limit < 1024 ? " · 低於此介面的最小設定，可能無法送出問題 / Below minimum configurable context" : ""}`
-      : "模型上限未知 / Model context limit unknown";
-    note.textContent = [contextNote, data.can_chat === false ? "此模型不支援文字生成 / This model cannot generate text" : "", data.input_limit ? `輸入上限 / Input: ${data.input_limit}` : "", data.output_limit ? `輸出上限 / Output: ${data.output_limit}${data.output_limit < 128 ? " (低於介面最小值，實際依模型上限 / Actual output is capped)" : ""}` : ""].filter(Boolean).join(" · ");
+    runtimeCapabilities = {
+      provider_group: data.provider_group || state.draftGroup || "local",
+      context_limit: data.context_limit || null,
+      input_limit: data.input_limit || null,
+      output_limit: data.output_limit || null,
+      known_context_limit: data.known_context_limit || null,
+      known_output_limit: data.known_output_limit || null,
+      can_chat: data.can_chat ?? null,
+      recommended: data.recommended || null,
+      index: data.index || null,
+    };
     syncRuntimeFields();
   } catch {
     if (seq === runtimeRequest) {
-      detectedRuntimeLimit = null;
-      detectedOutputLimit = null;
-      $("runtime-context").max = "32768";
-      note.textContent = "無法偵測模型上限 / Could not detect model limit";
+      runtimeCapabilities = {
+        ...runtimeCapabilities,
+        provider_group: state.draftGroup || "local",
+        context_limit: null,
+        input_limit: null,
+        output_limit: null,
+        known_context_limit: null,
+        known_output_limit: null,
+        can_chat: null,
+        recommended: null,
+      };
       syncRuntimeFields();
     }
   }
 }
-$("runtime-mode").addEventListener("change", syncRuntimeFields);
-for (const id of ["context", "output", "top-k", "temperature"]) $("runtime-" + id).addEventListener("input", syncRuntimeFields);
+
+for (const btn of document.querySelectorAll("#runtime-mode-group [data-runtime-mode]")) {
+  btn.addEventListener("click", () => {
+    runtimeState.mode = btn.dataset.runtimeMode === "advanced" ? "advanced" : "auto";
+    syncRuntimeFields();
+  });
+}
+
+$("runtime-context")?.addEventListener("input", (event) => {
+  const ticks = runtimeContextTicks();
+  const idx = Math.min(ticks.length - 1, Math.max(0, Number(event.target.value) || 0));
+  const { contextCeiling } = runtimeEffectiveLimits();
+  let chosen = ticks[idx];
+  if (contextCeiling !== null && chosen > contextCeiling) {
+    const allowed = ticks.filter(t => t <= contextCeiling);
+    chosen = allowed.length ? allowed[allowed.length - 1] : Math.max(1024, contextCeiling);
+  }
+  runtimeState.context = chosen;
+  syncRuntimeFields();
+});
+
+for (const btn of document.querySelectorAll("#runtime-output-group [data-runtime-output]")) {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    runtimeState.output = Number(btn.dataset.runtimeOutput);
+    syncRuntimeFields();
+  });
+}
+
+$("runtime-top-k-dec")?.addEventListener("click", () => {
+  runtimeState.top_k = Math.max(1, runtimeState.top_k - 1);
+  syncRuntimeFields();
+});
+$("runtime-top-k-inc")?.addEventListener("click", () => {
+  runtimeState.top_k = Math.min(16, runtimeState.top_k + 1);
+  syncRuntimeFields();
+});
+$("runtime-top-k")?.addEventListener("change", (event) => {
+  const parsed = Number.parseInt(event.target.value, 10);
+  runtimeState.top_k = Number.isFinite(parsed) ? Math.min(16, Math.max(1, parsed)) : 4;
+  syncRuntimeFields();
+});
+
+for (const btn of document.querySelectorAll("#runtime-evidence-group [data-runtime-evidence]")) {
+  btn.addEventListener("click", () => {
+    runtimeState.evidence_ratio = Number(btn.dataset.runtimeEvidence);
+    syncRuntimeFields();
+  });
+}
+
+for (const btn of document.querySelectorAll("#runtime-temperature-group [data-runtime-temp]")) {
+  btn.addEventListener("click", () => {
+    runtimeState.temperature = Number(btn.dataset.runtimeTemp);
+    syncRuntimeFields();
+  });
+}
+
+$("rebuild-index-btn")?.addEventListener("click", async () => {
+  const btn = $("rebuild-index-btn");
+  const status = $("runtime-index-status");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if (status) {
+    status.classList.remove("is-error");
+    status.textContent = english() ? "Rebuilding semantic chunks and clearing vector cache…" : "正在重建語意切塊並清理向量快取…";
+  }
+  try {
+    const res = await post("/api/index/rebuild", {});
+    runtimeCapabilities.index = {
+      documents: res.documents,
+      chunks: res.chunks,
+      cached_vectors: res.cached_vectors,
+      chunker_version: res.chunker_version,
+    };
+    renderRuntimeIndexStats();
+    if (status) {
+      status.textContent = english()
+        ? `Rebuilt ${res.chunks.toLocaleString("en-US")} chunks across ${res.documents} documents. Vector cache refreshed.`
+        : `已完成重建：共 ${res.documents} 份教材、${res.chunks.toLocaleString("en-US")} 個語意切塊，向量快取已重置。`;
+    }
+  } catch (error) {
+    if (status) {
+      status.classList.add("is-error");
+      status.textContent = friendlyError(error, "重建索引失敗，請稍後再試。");
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 async function detectModels(preserveSelection = false) {
   const seq = ++detectRequestSeq;
@@ -1101,6 +1434,11 @@ $("test-engine")?.addEventListener("click", async () => {
 function openSettings() {
   draftCliOptions = { ...savedCliOptions };
   $("runtime-settings").open = false;
+  const idxStatus = $("runtime-index-status");
+  if (idxStatus) {
+    idxStatus.textContent = "";
+    idxStatus.classList.remove("is-error");
+  }
   $("settings-dialog").showModal();
   detectModels(false);
   refreshRuntimeLimit();
@@ -1127,7 +1465,14 @@ bindForm("settings-form", async () => {
       cli_options: readDraftCliOptions(),
       retriever: $("retriever").value,
       language: $("response-language").value,
-      runtime: { mode: $("runtime-mode").value, context: Number($("runtime-context").value), output: Number($("runtime-output").value), top_k: Number($("runtime-top-k").value), temperature: Number($("runtime-temperature").value) }
+      runtime: {
+        mode: runtimeState.mode,
+        context: runtimeState.context,
+        output: runtimeState.output,
+        top_k: runtimeState.top_k,
+        temperature: runtimeState.temperature,
+        evidence_ratio: runtimeState.evidence_ratio,
+      }
     })
   }), "/api/settings");
   state.provider = provider;
@@ -1368,6 +1713,7 @@ document.addEventListener("aita-language", () => {
   if ($("settings-dialog").open) {
     renderEngineProviderGrid();
     populateModelsForProvider(state.draftProvider, getSelectedModelValue());
+    syncRuntimeFields();
   }
   if ($("records-dialog").open) listRecords().catch(report);
   syncAllCustomSelects();

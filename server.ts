@@ -3,12 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
-import { ingestDocument, MAX_UPLOAD } from './src/ingest.js';
+import { CHUNKER_VERSION, ingestDocument, MAX_UPLOAD, migrateChunksIfNeeded, rebuildAllChunks } from './src/ingest.js';
 import { migrateLegacyStore } from './src/migrate.js';
 import { renderMarkdown } from './src/markdown.js';
-import { autoTopK, DEFAULT_RUNTIME, modelCapabilities, readRuntime, resolveRuntime } from './src/runtime.js';
+import { autoTopK, DEFAULT_RUNTIME, knownModelLimits, modelCapabilities, providerGroupFor, readRuntime, recommendedAutoProfile, resolveRuntime } from './src/runtime.js';
 import { animateMascotAssets, getMascotStatus } from './src/mascot.js';
 import { isCliProvider, nextSeq, loadStore, persistStoreNow, Preferences, pruneInactiveDocuments, pruneOldJobs, readCliOptions, schedulePersist, store } from './src/store.js';
+import { clearVectors, loadVectorCache, pruneOrphanVectors, saveVectorCacheNow, scheduleVectorCacheSave } from './src/vectorStore.js';
 import type { CoursePlanRecord, RecordEntry } from './src/store.js';
 import {
   archiveCourseMaterials,
@@ -49,7 +50,7 @@ import {
   saveCloudKey,
   testEngineConnection,
 } from './src/llm.js';
-import { courseEvidence, courseHistory, evidenceRows, expandPageEvidence, expandTextEvidence, generateAnswer, policyQuestion, retrieveWithRetry, searchQuery } from './src/tutor.js';
+import { clearRetrievalCaches, courseEvidence, courseHistory, evidenceRows, expandPageEvidence, expandTextEvidence, generateAnswer, policyQuestion, retrieveWithRetry, searchQuery } from './src/tutor.js';
 
 const ROOT = process.cwd();
 const WEB_DIR = path.join(ROOT, 'aita', 'web');
@@ -665,6 +666,7 @@ app.delete('/api/notes/:key', (req, res) => {
     plan.overview_document_id = null;
   }
   pruneInactiveDocuments();
+  if (pruneOrphanVectors() > 0) scheduleVectorCacheSave();
   schedulePersist();
   res.json({ id: key, deleted: true });
 });
@@ -823,7 +825,41 @@ app.get('/api/runtime/capabilities', async (req, res) => {
     modelCapabilities(provider, model),
     provider === 'gemini' ? geminiTokenLimits(model) : Promise.resolve({ input_limit: null, output_limit: null }),
   ]);
-  res.json({ ...capabilities, ...limits });
+  const providerGroup = providerGroupFor(provider);
+  const known = knownModelLimits(provider, model);
+  const recommended = recommendedAutoProfile(providerGroup, capabilities.context_limit, limits, known);
+  let activeDocs = 0;
+  for (const doc of store.documents.values()) {
+    if (doc.active) activeDocs++;
+  }
+  res.json({
+    ...capabilities,
+    ...limits,
+    provider_group: providerGroup,
+    known_context_limit: known.context_limit,
+    known_output_limit: known.output_limit,
+    recommended,
+    index: {
+      documents: activeDocs,
+      chunks: store.chunks.size,
+      cached_vectors: store.vectors.size,
+      chunker_version: store.chunkerVersion || CHUNKER_VERSION,
+    },
+  });
+});
+
+app.post('/api/index/rebuild', (_req, res) => {
+  const rebuilt = rebuildAllChunks();
+  clearVectors();
+  clearRetrievalCaches();
+  persistStoreNow();
+  saveVectorCacheNow();
+  res.json({
+    documents: rebuilt.documents,
+    chunks: rebuilt.chunks,
+    cached_vectors: store.vectors.size,
+    chunker_version: store.chunkerVersion || CHUNKER_VERSION,
+  });
 });
 
 app.put('/api/settings', (req, res) => {
@@ -947,7 +983,13 @@ app.post('/api/ask', async (req, res, next) => {
         prefs.provider === 'gemini' ? geminiTokenLimits(prefs.model) : Promise.resolve({ input_limit: null, output_limit: null }),
       ]);
       if (capabilities.can_chat === false) throw httpError(422, '此模型未提供文字生成能力，請選擇支援對話的模型。');
-      const runtime = { ...resolveRuntime(prefs.runtime || DEFAULT_RUNTIME, capabilities.context_limit, tokenLimits), can_disable_thinking: capabilities.can_disable_thinking };
+      const runtime = {
+        ...resolveRuntime(prefs.runtime || DEFAULT_RUNTIME, capabilities.context_limit, tokenLimits, {
+          provider: prefs.provider,
+          model: prefs.model,
+        }),
+        can_disable_thinking: capabilities.can_disable_thinking,
+      };
       const historyRaw = conversationId ? loadTurns(conversationId) : [];
       const courseId = typeof body.course_id === 'string' && body.course_id ? body.course_id : null;
       if (courseId) requiredCoursePlan(courseId);
@@ -989,7 +1031,7 @@ app.post('/api/ask', async (req, res, next) => {
 
       const quote = scope && rows.length ? scope.quote : '';
       const retrievalQuery = quote ? `${quote}\n${query}` : query;
-      if (runtime.mode === 'auto') runtime.top_k = autoTopK(runtime.context, q);
+      if (runtime.mode === 'auto') runtime.top_k = autoTopK(runtime.context, q, runtime.provider_group);
       const retrieved = await retrieveWithRetry(rows, retrievalQuery, q, prefs.retriever, runtime.top_k);
       let hits = retrieved.hits;
       if (scope?.page && !scope.blocks.length && !quote && hits.length) {
@@ -1034,7 +1076,9 @@ app.post('/api/ask', async (req, res, next) => {
             : (prefs.language === 'en' ? 'All materials' : '全部教材'),
         warning: [
           retrieved.warning,
-          runtime.model_limit === null ? (prefs.language === 'en' ? 'Model context limit is unknown; the configured budget is an estimate.' : '無法偵測模型上下文上限，目前預算僅為估算。') : null,
+          runtime.model_limit === null && runtime.input_limit === null && runtime.known_context_limit === null
+            ? (prefs.language === 'en' ? 'Model context limit is unknown; the configured budget is an estimate.' : '無法偵測模型上下文上限，目前預算僅為估算。')
+            : null,
           isCliProvider(prefs.provider) ? (prefs.language === 'en' ? 'CLI controls its own output length and temperature.' : 'CLI 的輸出長度與溫度由 CLI 自行控制。') : null,
           reply.evidence_warning,
           courseId && !scope && reply.status === 'insufficient'
@@ -1659,6 +1703,21 @@ if (!loadStore() && migrateLegacyStore()) {
   console.log('Migrated the legacy AITA SQLite store to BIIBO.');
 }
 
+const loadedVectors = loadVectorCache();
+const chunkMigration = migrateChunksIfNeeded();
+if (chunkMigration.migrated) {
+  const pruned = pruneOrphanVectors();
+  persistStoreNow();
+  if (pruned > 0 || loadedVectors > 0) {
+    saveVectorCacheNow();
+  }
+  console.log(`[ingest] Migrated ${chunkMigration.documents} document(s) to ${chunkMigration.chunks} semantic chunks (${CHUNKER_VERSION}).`);
+} else if (loadedVectors > 0) {
+  const pruned = pruneOrphanVectors();
+  if (pruned > 0) scheduleVectorCacheSave();
+  console.log(`[vectors] Loaded ${store.vectors.size} cached embeddings from local binary store.`);
+}
+
 app.listen(PORT, HOST, () => {
   console.log(`AITA server running on http://${HOST}:${PORT}`);
 });
@@ -1667,6 +1726,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     try {
       persistStoreNow();
+      saveVectorCacheNow();
     } catch (err) {
       console.error('[store] Failed to save on shutdown:', err);
       process.exit(1);

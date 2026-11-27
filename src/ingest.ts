@@ -5,6 +5,7 @@ import { Block, DocumentRecord, store } from './store.js';
 
 export const MAX_UPLOAD = 50 * 1024 * 1024;
 export const PARSER_REVISION = 'blocks-v1';
+export const CHUNKER_VERSION = 'semantic-v2';
 
 const PAGE_LINE_RE = /^<!--\s*page:\s*(\d+)\s*-->$/;
 const HEADING_RE = /^(#{1,6})\s+(.+)$/;
@@ -383,28 +384,572 @@ export function pdfBlocks(structured: unknown): Block[] {
   return blocks;
 }
 
-export function chunksFor(blocks: Block[]): Array<[number, string]> {
-  const result: Array<[number, string]> = [];
-  for (let index = 0; index < blocks.length; index++) {
-    const block = blocks[index];
-    const text = block.text;
-    const isStructured =
-      ['table', 'equation', 'interline_equation', 'code', 'image'].includes(block.type) ||
-      text.includes('```') ||
-      /^\|.*\|$/m.test(text);
-    const sections = isStructured ? [text] : text.split(/\n\s*\n/);
-    for (const sec of sections) {
-      if (!sec.trim()) continue;
-      if (isStructured || sec.length <= 420) {
-        result.push([index, sec.trim()]);
+export interface SemanticChunk {
+  blocks: number[];
+  text: string;
+  section: string;
+  page: number | null;
+}
+
+const SEMANTIC_TARGET_CHARS = 620;
+const SEMANTIC_MAX_CHARS = 840;
+const OVERLAP_MIN_CHARS = 75;
+const OVERLAP_MAX_CHARS = 150;
+
+const ANSWER_BOUNDARY_RE = /^\s*[#*\s]*(?:答案|answer|solution)\s*[:：]/i;
+const STRUCTURED_BLOCK_TYPES = new Set(['table', 'equation', 'interline_equation', 'code', 'image']);
+const HEADING_BLOCK_TYPES = new Set(['doc_title', 'paragraph_title', 'heading', 'title']);
+const EXCLUDED_BLOCK_TYPES = new Set(['footer', 'page_number']);
+
+function isHeadingOnlyText(text: string): boolean {
+  const trimmed = text.trim();
+  return /^#{1,6}\s+\S/.test(trimmed) && !trimmed.includes('\n');
+}
+
+function isHeadingBlock(block: Block): boolean {
+  return HEADING_BLOCK_TYPES.has(block.type) || isHeadingOnlyText(block.text);
+}
+
+function isAtomicStructuredBlock(block: Block): boolean {
+  if (STRUCTURED_BLOCK_TYPES.has(block.type)) return true;
+  const trimmed = block.text.trim();
+  if (/^\$\$[\s\S]*\$\$$/.test(trimmed)) return true;
+  return false;
+}
+
+interface TextUnit {
+  blockIdx: number;
+  text: string;
+  atomic: boolean;
+  isHeading: boolean;
+}
+
+// Parse a single block into paragraph / fenced-code / display-math / table / heading units without splitting atomic elements.
+function extractUnitsFromBlock(block: Block, blockIdx: number): TextUnit[] {
+  const raw = block.text.trim();
+  if (!raw) return [];
+  if (isAtomicStructuredBlock(block)) {
+    return [{ blockIdx, text: raw, atomic: true, isHeading: false }];
+  }
+  if (isHeadingBlock(block) && !raw.includes('\n')) {
+    return [{ blockIdx, text: raw, atomic: false, isHeading: true }];
+  }
+
+  const lines = raw.split(/\r?\n/);
+  const units: TextUnit[] = [];
+  let buf: string[] = [];
+  let fence = '';
+  let inMath = false;
+  let inTable = false;
+
+  const flushBuf = (atomic: boolean) => {
+    const joined = buf.join('\n').trim();
+    buf = [];
+    if (!joined) return;
+    units.push({
+      blockIdx,
+      text: joined,
+      atomic,
+      isHeading: !atomic && isHeadingOnlyText(joined),
+    });
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Fenced code blocks
+    const fenceMatch = /^\s*([`~]{3,})/.exec(line);
+    if (fenceMatch && !inMath) {
+      if (!fence) {
+        if (buf.length) flushBuf(inTable);
+        inTable = false;
+        fence = fenceMatch[1];
+        buf.push(line);
+      } else if (fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) {
+        buf.push(line);
+        fence = '';
+        flushBuf(true);
+      } else {
+        buf.push(line);
+      }
+      continue;
+    }
+    if (fence) {
+      buf.push(line);
+      continue;
+    }
+
+    // Display math blocks ($$ ... $$)
+    if (trimmed === '$$' || (trimmed.startsWith('$$') && !trimmed.slice(2).includes('$$'))) {
+      if (!inMath) {
+        if (buf.length) flushBuf(inTable);
+        inTable = false;
+        inMath = true;
+        buf.push(line);
+      } else {
+        buf.push(line);
+        inMath = false;
+        flushBuf(true);
+      }
+      continue;
+    }
+    if (inMath) {
+      buf.push(line);
+      continue;
+    }
+    if (/^\$\$[\s\S]+\$\$$/.test(trimmed)) {
+      if (buf.length) flushBuf(inTable);
+      inTable = false;
+      units.push({ blockIdx, text: trimmed, atomic: true, isHeading: false });
+      continue;
+    }
+
+    // Markdown table rows
+    const isTableLine = /^\|.*\|$/.test(trimmed);
+    if (isTableLine) {
+      if (!inTable && buf.length) flushBuf(false);
+      inTable = true;
+      buf.push(line);
+      continue;
+    }
+    if (inTable) {
+      flushBuf(true);
+      inTable = false;
+    }
+
+    // Blank line ends paragraph
+    if (!trimmed) {
+      if (buf.length) flushBuf(false);
+      continue;
+    }
+
+    // Standalone markdown heading line
+    if (/^#{1,6}\s+\S/.test(trimmed)) {
+      if (buf.length) flushBuf(false);
+      units.push({ blockIdx, text: trimmed, atomic: false, isHeading: true });
+      continue;
+    }
+
+    buf.push(line);
+  }
+
+  if (buf.length) {
+    flushBuf(Boolean(fence) || inMath || inTable);
+  }
+  return units;
+}
+
+// Split prose into complete sentences while avoiding decimals (3.14) and common abbreviations (e.g., i.e., Fig.).
+function splitIntoSentences(text: string): string[] {
+  const sentences: string[] = [];
+  const abbrRe = /(?:^|[\s(])(?:e\.g|i\.e|vs|etc|fig|eq|dr|mr|ms|prof|no|vol|sec|ch|al|st)\.$/i;
+  let start = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1] || '';
+    const prev = text[i - 1] || '';
+
+    // CJK sentence-ending punctuation
+    if (ch === '。' || ch === '！' || ch === '？' || ch === '；') {
+      let end = i + 1;
+      while (end < text.length && /[」』”’）)\]]/.test(text[end])) end++;
+      const piece = text.slice(start, end).trim();
+      if (piece) sentences.push(piece);
+      while (end < text.length && /\s/.test(text[end])) end++;
+      start = end;
+      i = end - 1;
+      continue;
+    }
+
+    // Latin sentence-ending punctuation followed by whitespace or end of string
+    if ((ch === '.' || ch === '!' || ch === '?' || ch === ';') && (next === '' || /\s/.test(next) || /[)"'\]」』]/.test(next))) {
+      // Skip decimal numbers like 3.14 or numbered list prefixes like "1. "
+      if (ch === '.' && /\d/.test(prev) && (/\d/.test(next) || /^\s*\d+\.$/.test(text.slice(start, i + 1)))) {
         continue;
       }
-      for (let offset = 0; offset < sec.length; offset += 380) {
-        result.push([index, sec.slice(Math.max(0, offset - 45), offset + 380).trim()]);
+      if (ch === '.' && abbrRe.test(text.slice(Math.max(start, i - 10), i + 1))) {
+        continue;
       }
+      let end = i + 1;
+      while (end < text.length && /[)"'\]」』]/.test(text[end])) end++;
+      if (end < text.length && !/\s/.test(text[end])) continue;
+      const piece = text.slice(start, end).trim();
+      if (piece) sentences.push(piece);
+      while (end < text.length && /\s/.test(text[end])) end++;
+      start = end;
+      i = end - 1;
     }
   }
-  return result;
+
+  const tail = text.slice(start).trim();
+  if (tail) sentences.push(tail);
+  return sentences.length ? sentences : [text.trim()].filter(Boolean);
+}
+
+function splitLongSentence(sentence: string, maxChars: number): string[] {
+  if (sentence.length <= maxChars) return [sentence];
+
+  // Try clause punctuation first (commas, colons, CJK commas).
+  const clauses = sentence
+    .split(/(?<=[，、：:,])\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (clauses.length > 1) {
+    const packed: string[] = [];
+    let current = '';
+    for (const clause of clauses) {
+      if (!current) {
+        current = clause;
+      } else if (current.length + 1 + clause.length <= maxChars) {
+        current = `${current} ${clause}`;
+      } else {
+        packed.push(current);
+        current = clause;
+      }
+    }
+    if (current) packed.push(current);
+    if (packed.every((p) => p.length <= maxChars)) return packed;
+  }
+
+  // Fallback: split on whitespace word boundaries, or hard slice only for unbroken strings.
+  const out: string[] = [];
+  let pos = 0;
+  while (pos < sentence.length) {
+    let end = Math.min(sentence.length, pos + maxChars);
+    if (end < sentence.length) {
+      const spaceIdx = sentence.lastIndexOf(' ', end);
+      if (spaceIdx > pos + Math.floor(maxChars * 0.55)) {
+        end = spaceIdx;
+      }
+    }
+    const part = sentence.slice(pos, end).trim();
+    if (part) out.push(part);
+    pos = end;
+    while (pos < sentence.length && sentence[pos] === ' ') pos++;
+  }
+  return out;
+}
+
+function splitOversizedProse(text: string): string[] {
+  // First preserve list-item or line boundaries if the paragraph is a multi-line list.
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const isListLike =
+    lines.length > 1 &&
+    lines.filter((l) => /^(?:[-*+•]|\d+[.)、]|\([A-Za-z0-9]+\))\s+/.test(l)).length >= 2;
+
+  const segments: string[] = [];
+  if (isListLike) {
+    for (const line of lines) {
+      if (line.length <= SEMANTIC_MAX_CHARS) {
+        segments.push(line);
+      } else {
+        for (const s of splitIntoSentences(line)) {
+          segments.push(...splitLongSentence(s, SEMANTIC_TARGET_CHARS));
+        }
+      }
+    }
+  } else {
+    for (const s of splitIntoSentences(text)) {
+      segments.push(...splitLongSentence(s, SEMANTIC_TARGET_CHARS));
+    }
+  }
+
+  const sep = isListLike ? '\n' : ' ';
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentLen = 0;
+
+  const trailingOverlap = (parts: string[]): string[] => {
+    const picked: string[] = [];
+    let total = 0;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const seg = parts[i];
+      if (picked.length >= 2) break;
+      if (total > 0 && total + seg.length + 1 > OVERLAP_MAX_CHARS) break;
+      if (picked.length === 0 && seg.length > OVERLAP_MAX_CHARS + 30) break;
+      picked.unshift(seg);
+      total += seg.length + (picked.length > 1 ? 1 : 0);
+      if (total >= OVERLAP_MIN_CHARS) break;
+    }
+    return picked;
+  };
+
+  for (const seg of segments) {
+    const addedLen = current.length ? currentLen + sep.length + seg.length : seg.length;
+    if (current.length > 0 && addedLen > SEMANTIC_TARGET_CHARS && currentLen >= Math.floor(SEMANTIC_TARGET_CHARS * 0.5)) {
+      chunks.push(current.join(sep).trim());
+      const overlap = trailingOverlap(current);
+      // Only carry overlap if it leaves room for the new segment without exceeding max.
+      const overlapLen = overlap.reduce((sum, s) => sum + s.length, 0) + Math.max(0, overlap.length - 1) * sep.length;
+      if (overlap.length > 0 && overlapLen + sep.length + seg.length <= SEMANTIC_MAX_CHARS) {
+        current = [...overlap, seg];
+        currentLen = overlapLen + sep.length + seg.length;
+      } else {
+        current = [seg];
+        currentLen = seg.length;
+      }
+    } else {
+      current.push(seg);
+      currentLen = addedLen;
+    }
+  }
+
+  if (current.length) {
+    const finalText = current.join(sep).trim();
+    // Avoid emitting a tiny orphan tail if it comfortably fits the previous chunk.
+    if (chunks.length > 0 && finalText.length < 140 && chunks[chunks.length - 1].length + sep.length + finalText.length <= SEMANTIC_MAX_CHARS + 60) {
+      chunks[chunks.length - 1] = `${chunks[chunks.length - 1]}${sep}${finalText}`.trim();
+    } else if (finalText) {
+      chunks.push(finalText);
+    }
+  }
+  return chunks;
+}
+
+function uniqueSorted(nums: number[]): number[] {
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+export function semanticChunksFor(blocks: Block[]): SemanticChunk[] {
+  const results: SemanticChunk[] = [];
+
+  interface SectionGroup {
+    page: number | null;
+    section: string;
+    units: TextUnit[];
+  }
+
+  const flushGroup = (group: SectionGroup | null) => {
+    if (!group || group.units.length === 0) return;
+
+    let pendingTexts: string[] = [];
+    let pendingBlocks: number[] = [];
+    let pendingLen = 0;
+    let pendingHeadingOnly = false;
+    let activeHeading: string | null = null;
+
+    const emitPending = () => {
+      const text = pendingTexts.join('\n\n').trim();
+      if (text) {
+        results.push({
+          blocks: uniqueSorted(pendingBlocks),
+          text,
+          section: group.section,
+          page: group.page,
+        });
+      }
+      pendingTexts = [];
+      pendingBlocks = [];
+      pendingLen = 0;
+      pendingHeadingOnly = false;
+    };
+
+    const appendUnit = (unit: TextUnit) => {
+      pendingTexts.push(unit.text);
+      pendingBlocks.push(unit.blockIdx);
+      pendingLen = pendingTexts.reduce((sum, s) => sum + s.length, 0) + Math.max(0, pendingTexts.length - 1) * 2;
+      pendingHeadingOnly = pendingHeadingOnly && unit.isHeading;
+    };
+
+    for (const unit of group.units) {
+      if (unit.isHeading) {
+        if (pendingTexts.length && !pendingHeadingOnly) {
+          emitPending();
+        }
+        activeHeading = unit.text;
+        pendingTexts.push(unit.text);
+        pendingBlocks.push(unit.blockIdx);
+        pendingLen = pendingTexts.reduce((sum, s) => sum + s.length, 0) + Math.max(0, pendingTexts.length - 1) * 2;
+        pendingHeadingOnly = true;
+        continue;
+      }
+
+      if (unit.atomic) {
+        if (pendingHeadingOnly) {
+          // Attach heading directly above the atomic table/equation/code block.
+          appendUnit(unit);
+          emitPending();
+        } else {
+          if (pendingTexts.length) emitPending();
+          results.push({
+            blocks: [unit.blockIdx],
+            text: unit.text,
+            section: group.section,
+            page: group.page,
+          });
+        }
+        continue;
+      }
+
+      // Normal prose unit
+      if (unit.text.length > SEMANTIC_MAX_CHARS) {
+        const prefixText = pendingHeadingOnly ? pendingTexts.join('\n\n') : null;
+        const prefixBlocks = pendingHeadingOnly ? [...pendingBlocks] : [];
+        if (pendingTexts.length && !pendingHeadingOnly) {
+          emitPending();
+        } else if (pendingHeadingOnly) {
+          pendingTexts = [];
+          pendingBlocks = [];
+          pendingLen = 0;
+          pendingHeadingOnly = false;
+        }
+
+        const pieces = splitOversizedProse(unit.text);
+        pieces.forEach((piece, idx) => {
+          const textWithHeading =
+            idx === 0 && prefixText
+              ? `${prefixText}\n\n${piece}`
+              : idx > 0 && activeHeading && piece.length + activeHeading.length + 2 <= SEMANTIC_MAX_CHARS + 80
+                ? `${activeHeading}\n\n${piece}`
+                : piece;
+          const contributing = idx === 0 ? uniqueSorted([...prefixBlocks, unit.blockIdx]) : [unit.blockIdx];
+          results.push({
+            blocks: contributing,
+            text: textWithHeading.trim(),
+            section: group.section,
+            page: group.page,
+          });
+        });
+        continue;
+      }
+
+      // Fit prose unit into pending chunk if under soft ceiling or heading-only
+      const projectedLen = pendingTexts.length ? pendingLen + 2 + unit.text.length : unit.text.length;
+      if (pendingTexts.length === 0 || pendingHeadingOnly || projectedLen <= SEMANTIC_TARGET_CHARS || (projectedLen <= SEMANTIC_MAX_CHARS && pendingLen < 320)) {
+        if (pendingTexts.length === 0) pendingHeadingOnly = false;
+        appendUnit(unit);
+        pendingHeadingOnly = false;
+      } else {
+        // Carry trailing sentence overlap from the flushed chunk if it is prose-only and concise.
+        const prevText = pendingTexts.join('\n\n').trim();
+        emitPending();
+        const prevSentences = splitIntoSentences(prevText);
+        const lastSentence = prevSentences[prevSentences.length - 1] || '';
+        const shouldCarry =
+          lastSentence.length >= OVERLAP_MIN_CHARS &&
+          lastSentence.length <= OVERLAP_MAX_CHARS &&
+          !isHeadingOnlyText(lastSentence) &&
+          !lastSentence.includes('```') &&
+          lastSentence.length + 2 + unit.text.length <= SEMANTIC_MAX_CHARS;
+        if (shouldCarry) {
+          pendingTexts.push(lastSentence);
+          pendingLen = lastSentence.length;
+        }
+        appendUnit(unit);
+        pendingHeadingOnly = false;
+      }
+    }
+
+    emitPending();
+  };
+
+  let currentGroup: SectionGroup | null = null;
+
+  for (let idx = 0; idx < blocks.length; idx++) {
+    const block = blocks[idx];
+    const trimmed = block.text.trim();
+    if (!trimmed) continue;
+
+    // Keep footer/page_number blocks isolated so evidenceRows() can filter them out cleanly.
+    if (EXCLUDED_BLOCK_TYPES.has(block.type)) {
+      flushGroup(currentGroup);
+      currentGroup = null;
+      results.push({
+        blocks: [idx],
+        text: trimmed,
+        section: block.section,
+        page: block.page,
+      });
+      continue;
+    }
+
+    const units = extractUnitsFromBlock(block, idx);
+    if (!units.length) continue;
+
+    const startsAnswer = ANSWER_BOUNDARY_RE.test(trimmed);
+    const sameGroup =
+      currentGroup !== null &&
+      !startsAnswer &&
+      currentGroup.page === block.page &&
+      currentGroup.section === block.section;
+
+    if (!sameGroup) {
+      flushGroup(currentGroup);
+      currentGroup = {
+        page: block.page,
+        section: block.section,
+        units: [...units],
+      };
+    } else {
+      currentGroup!.units.push(...units);
+    }
+  }
+
+  flushGroup(currentGroup);
+  return results;
+}
+
+export function chunksFor(blocks: Block[]): Array<[number, string]> {
+  return semanticChunksFor(blocks).map((chunk) => [chunk.blocks[0] ?? 0, chunk.text]);
+}
+
+function indexDocumentChunks(doc: DocumentRecord): number {
+  const chunkList = semanticChunksFor(doc.blocks);
+  let count = 0;
+  chunkList.forEach((chunk, i) => {
+    if (doc.kind === 'note' && !chunk.page) return;
+    const section =
+      doc.kind === 'personal'
+        ? [doc.name, chunk.section].filter(Boolean).join(' · ')
+        : chunk.section;
+    const chunkId = `${doc.id}-${i}`;
+    store.chunks.set(chunkId, {
+      id: chunkId,
+      document_id: doc.id,
+      position: i,
+      section,
+      page: chunk.page,
+      text: chunk.text,
+      blocks: chunk.blocks,
+    });
+    count++;
+  });
+  return count;
+}
+
+export function rebuildDocumentChunks(doc: DocumentRecord): number {
+  for (const [chunkId, chunk] of [...store.chunks.entries()]) {
+    if (chunk.document_id === doc.id) {
+      store.chunks.delete(chunkId);
+    }
+  }
+  return indexDocumentChunks(doc);
+}
+
+export function rebuildAllChunks(): { documents: number; chunks: number } {
+  let documents = 0;
+  let chunks = 0;
+  for (const doc of store.documents.values()) {
+    if (!doc.blocks || doc.blocks.length === 0) continue;
+    chunks += rebuildDocumentChunks(doc);
+    documents++;
+  }
+  store.chunkerVersion = CHUNKER_VERSION;
+  return { documents, chunks };
+}
+
+export function migrateChunksIfNeeded(): { migrated: boolean; documents: number; chunks: number } {
+  if (store.chunkerVersion === CHUNKER_VERSION) {
+    return { migrated: false, documents: 0, chunks: 0 };
+  }
+  if (store.documents.size === 0) {
+    store.chunkerVersion = CHUNKER_VERSION;
+    return { migrated: false, documents: 0, chunks: 0 };
+  }
+  const result = rebuildAllChunks();
+  return { migrated: true, ...result };
 }
 
 export async function ingestDocument(params: {
@@ -510,26 +1055,10 @@ export async function ingestDocument(params: {
       created: new Date().toISOString(),
     };
     store.documents.set(documentId, docRecord);
-
-    const chunkList = chunksFor(blocks);
-    chunkList.forEach(([blockId, text], i) => {
-      const block = blocks[blockId];
-      if (kind === 'note' && !block.page) return;
-      const section =
-        kind === 'personal'
-          ? [name, block.section].filter(Boolean).join(' · ')
-          : block.section;
-      const chunkId = `${documentId}-${i}`;
-      store.chunks.set(chunkId, {
-        id: chunkId,
-        document_id: documentId,
-        position: i,
-        section,
-        page: block.page,
-        text,
-        blocks: [blockId],
-      });
-    });
+    indexDocumentChunks(docRecord);
+    if (!store.chunkerVersion) {
+      store.chunkerVersion = CHUNKER_VERSION;
+    }
 
     if (assets.size > 0) {
       store.assets.set(documentId, assets);

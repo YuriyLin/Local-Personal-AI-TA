@@ -598,19 +598,83 @@
           <select id="response-language"><option value="zh-Hant">繁體中文</option><option value="en">English</option></select>
         </div>
       </div>
-      <details id="runtime-settings" class="settings-section">
-        <summary>進階 AI 設定 / Advanced AI settings</summary>
-        <p class="engine-hint">自動模式使用預設值。上下文與輸入 token 為保守估算，實際用量依模型而異。</p>
-        <p class="engine-hint">實際支援的參數取決於模型與供應商；部分模型可能忽略 temperature。本機 CLI 自行控制輸出長度與溫度。</p>
-        <p class="engine-hint">Top-k 控制初始檢索候選數；同頁或相鄰段落可能作為脈絡加入，最後仍受輸入預算限制。</p>
-        <label for="runtime-mode">執行模式 / Runtime mode</label>
-        <select id="runtime-mode"><option value="auto">自動 / Auto</option><option value="advanced">進階 / Advanced</option></select>
-        <p id="runtime-capability" class="engine-hint" role="status"></p>
-        <div id="runtime-fields" class="settings-prefs-grid">
-          <div class="settings-field"><label for="runtime-context">Context tokens <output id="runtime-context-value"></output></label><input id="runtime-context" type="range" min="1024" max="32768" step="256" value="4096"></div>
-          <div class="settings-field"><label for="runtime-output">Output tokens <output id="runtime-output-value"></output></label><input id="runtime-output" type="range" min="128" max="2048" step="128" value="512"></div>
-          <div class="settings-field"><label for="runtime-top-k">Top-k <output id="runtime-top-k-value"></output></label><input id="runtime-top-k" type="range" min="1" max="8" step="1" value="3"></div>
-          <div class="settings-field"><label for="runtime-temperature">Temperature <output id="runtime-temperature-value"></output></label><input id="runtime-temperature" type="range" min="0" max="1" step="0.05" value="0"></div>
+      <details id="runtime-settings" class="settings-section runtime-settings-box">
+        <summary class="runtime-summary">進階 AI 設定</summary>
+        <div class="runtime-mode-row">
+          <span class="runtime-label">執行模式</span>
+          <div class="runtime-seg runtime-seg-compact" id="runtime-mode-group" role="group" aria-label="執行模式">
+            <button type="button" data-runtime-mode="auto" aria-pressed="true">自動</button>
+            <button type="button" data-runtime-mode="advanced" aria-pressed="false">進階</button>
+          </div>
+          <input type="hidden" id="runtime-mode" value="auto">
+        </div>
+        <p id="runtime-capability" class="runtime-status-line" role="status"></p>
+        <div id="runtime-advanced-panel" class="runtime-advanced-panel" hidden>
+          <div class="runtime-control-block">
+            <div class="runtime-control-head">
+              <label for="runtime-context">上下文長度 (Context)</label>
+              <output id="runtime-context-value" class="runtime-mono" for="runtime-context">4,096 tokens</output>
+            </div>
+            <div class="runtime-slider-wrap">
+              <input id="runtime-context" class="runtime-tick-slider" type="range" min="0" max="5" step="1" value="1" aria-label="上下文長度 (Context)">
+              <div id="runtime-context-ticks" class="runtime-ticks" role="group" aria-label="上下文刻度"></div>
+            </div>
+          </div>
+          <div class="runtime-control-grid">
+            <div class="runtime-control-block">
+              <div class="runtime-control-head">
+                <span class="runtime-label">輸出上限 (Output)</span>
+                <output id="runtime-output-value" class="runtime-mono">512</output>
+              </div>
+              <div id="runtime-output-group" class="runtime-seg" role="group" aria-label="輸出上限 (Output)">
+                <button type="button" data-runtime-output="512" aria-pressed="true">512</button>
+                <button type="button" data-runtime-output="1024" aria-pressed="false">1K</button>
+                <button type="button" data-runtime-output="2048" aria-pressed="false">2K</button>
+                <button type="button" data-runtime-output="4096" aria-pressed="false">4K</button>
+              </div>
+            </div>
+            <div class="runtime-control-block">
+              <div class="runtime-control-head">
+                <label for="runtime-top-k">檢索段落數 (Top-k)</label>
+                <span class="runtime-unit">段</span>
+              </div>
+              <div class="runtime-stepper">
+                <button type="button" id="runtime-top-k-dec" class="runtime-step-btn" aria-label="減少檢索段落數">−</button>
+                <input id="runtime-top-k" class="runtime-step-input runtime-mono" type="number" min="1" max="16" step="1" value="4">
+                <button type="button" id="runtime-top-k-inc" class="runtime-step-btn" aria-label="增加檢索段落數">+</button>
+              </div>
+            </div>
+          </div>
+          <div class="runtime-control-grid">
+            <div class="runtime-control-block">
+              <div class="runtime-control-head">
+                <span class="runtime-label">證據預算比例</span>
+                <output id="runtime-evidence-value" class="runtime-mono">70%</output>
+              </div>
+              <div id="runtime-evidence-group" class="runtime-seg" role="group" aria-label="證據預算比例">
+                <button type="button" data-runtime-evidence="0.6" aria-pressed="false">平衡 60%</button>
+                <button type="button" data-runtime-evidence="0.7" aria-pressed="true">充裕 70%</button>
+                <button type="button" data-runtime-evidence="0.8" aria-pressed="false">最大化 80%</button>
+              </div>
+            </div>
+            <div class="runtime-control-block">
+              <div class="runtime-control-head">
+                <span class="runtime-label">回答風格 (Temperature)</span>
+                <output id="runtime-temperature-value" class="runtime-mono">0.0</output>
+              </div>
+              <div id="runtime-temperature-group" class="runtime-seg" role="group" aria-label="回答風格 (Temperature)">
+                <button type="button" data-runtime-temp="0" aria-pressed="true">嚴謹 0.0</button>
+                <button type="button" data-runtime-temp="0.2" aria-pressed="false">平衡 0.2</button>
+                <button type="button" data-runtime-temp="0.5" aria-pressed="false">彈性 0.5</button>
+              </div>
+            </div>
+          </div>
+          <div class="runtime-index-row">
+            <span id="runtime-index-stats" class="runtime-index-stats runtime-mono"></span>
+            <button type="button" id="rebuild-index-btn" class="settings-inline-btn">重建切塊與向量索引</button>
+          </div>
+          <p id="runtime-index-status" class="runtime-subnote" role="status"></p>
+          <p class="runtime-footnote">實際生效參數依模型與供應商為準；本機 CLI 自行控制輸出長度與溫度。</p>
         </div>
       </details>
       <p id="settings-status" role="status"></p>

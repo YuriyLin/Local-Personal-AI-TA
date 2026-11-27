@@ -473,6 +473,27 @@ AI 模型引擎|AI model engine
 課綱規劃完成|Syllabus Planning Complete
 規劃結果摘要|Planning summary
 關閉通知|Dismiss notification
+進階 AI 設定|Advanced AI Settings
+執行模式|Runtime mode
+自動|Auto
+進階|Advanced
+上下文長度 (Context)|Context length
+上下文刻度|Context ticks
+輸出上限 (Output)|Output limit
+檢索段落數 (Top-k)|Retrieved passages (Top-k)
+段|passages
+減少檢索段落數|Decrease Top-k
+增加檢索段落數|Increase Top-k
+證據預算比例|Evidence budget
+平衡 60%|Balanced 60%
+充裕 70%|Generous 70%
+最大化 80%|Max 80%
+回答風格 (Temperature)|Response style (Temperature)
+嚴謹 0.0|Strict 0.0
+平衡 0.2|Balanced 0.2
+彈性 0.5|Flexible 0.5
+重建切塊與向量索引|Rebuild chunks & vector index
+實際生效參數依模型與供應商為準；本機 CLI 自行控制輸出長度與溫度。|Effective parameters depend on the model and provider; local CLIs manage output length and temperature.
 `.trim().split("\n").map(line => line.split("|")));
 
 let interfaceLanguage;

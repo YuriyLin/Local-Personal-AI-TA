@@ -255,6 +255,7 @@ export const store = {
   } as Preferences,
   nextTurnId: 1,
   nextSeq: 1,
+  chunkerVersion: null as string | null,
 };
 
 export function nextSeq(): number {
@@ -284,6 +285,7 @@ interface PersistedDocument {
 
 interface PersistedStore {
   schema: 'biibo-store-v1';
+  chunker_version?: string;
   saved_at: string;
   nextTurnId: number;
   nextSeq: number;
@@ -439,6 +441,7 @@ function buildPersistSnapshot(): { snapshot: PersistedStore; activeBlobs: Set<st
 
   const snapshot: PersistedStore = {
     schema: 'biibo-store-v1',
+    ...(store.chunkerVersion ? { chunker_version: store.chunkerVersion } : {}),
     saved_at: new Date().toISOString(),
     nextTurnId: store.nextTurnId,
     nextSeq: store.nextSeq,
@@ -793,6 +796,9 @@ export function loadStore(): boolean {
     if (typeof data.nextSeq === 'number' && data.nextSeq > 0) {
       store.nextSeq = data.nextSeq;
     }
+    store.chunkerVersion = typeof data.chunker_version === 'string' && data.chunker_version.trim()
+      ? data.chunker_version.trim()
+      : null;
     return true;
   } catch (err) {
     throw new Error('Could not open the BIIBO store. Restore a valid backup before starting.', { cause: err });

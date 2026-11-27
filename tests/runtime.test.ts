@@ -17,10 +17,10 @@ test('runtime validates input and clamps to detected model limit', () => {
   assert.equal(resolveRuntime(settings, 2048).output, 1024);
   assert.equal(resolveRuntime({ ...settings, mode: 'auto' }, null).context, DEFAULT_RUNTIME.context);
   assert.ok(inputByteBudget(4096, 512) < 4096 - 512);
-  assert.equal(autoTopK(2048, 'short'), 2);
-  assert.equal(autoTopK(4096, 'short'), 3);
-  assert.equal(autoTopK(4096, 'a'.repeat(121)), 4);
-  assert.equal(autoTopK(32768, 'short'), 5);
+  assert.equal(autoTopK(2048, 'short'), 3);
+  assert.equal(autoTopK(4096, 'short'), 4);
+  assert.equal(autoTopK(4096, 'a'.repeat(121)), 5);
+  assert.equal(autoTopK(32768, 'short', 'cloud'), 10);
   assert.ok(requestByteEstimate([{ role: 'user', content: 'text' }], { type: 'object' }) > requestByteEstimate([{ role: 'user', content: 'text' }], {}));
   const limited = resolveRuntime(settings, null, { input_limit: 1400, output_limit: 256 });
   assert.equal(limited.output, 256);
