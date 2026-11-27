@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRuntime } from './runtime.js';
 
 export interface Block {
   text: string;
@@ -120,12 +121,13 @@ export function readCliOptions(provider: ModelProvider, value: unknown): CliOpti
 }
 
 export interface Preferences {
-  mode: 'hint' | 'concept' | 'debug';
+  mode: 'hint' | 'concept' | 'debug' | 'ask';
   provider: ModelProvider;
   model: string;
   retriever: 'tfidf' | 'dense' | 'hybrid';
   language: 'zh-Hant' | 'en';
   cli_options?: Partial<Record<CliProvider, CliOptions>>;
+  runtime?: import('./runtime.js').RuntimeSettings;
 }
 
 export interface FolderRecord {
@@ -550,6 +552,18 @@ export function loadStore(): boolean {
     const data = JSON.parse(rawText) as Partial<PersistedStore>;
     if (!data || data.schema !== 'biibo-store-v1') throw new Error('Unknown store schema.');
 
+    // Missing blobs must not be loaded as empty and overwritten on the next save.
+    const missing = new Set<string>();
+    for (const doc of data.documents || []) {
+      const names = [doc?.raw_blob, ...(doc?.asset_files || []).map(asset => asset.blob_file)];
+      for (const name of names) {
+        if (typeof name !== 'string') continue;
+        const fullPath = safeBlobPath(name);
+        if (!fullPath || !fs.existsSync(fullPath)) missing.add(name);
+      }
+    }
+    if (missing.size) throw new Error(`The store references ${missing.size} missing or invalid file(s). Restore the referenced files from a backup.`);
+
     store.documents.clear();
     store.chunks.clear();
     store.assets.clear();
@@ -684,12 +698,13 @@ export function loadStore(): boolean {
         if (options) cliOptions[candidate] = options;
       }
       store.settings = {
-        mode: s.mode === 'concept' || s.mode === 'debug' ? s.mode : 'hint',
+        mode: s.mode === 'concept' || s.mode === 'debug' || s.mode === 'ask' ? s.mode : 'hint',
         provider,
         model: typeof s.model === 'string' && s.model.trim() ? s.model : store.settings.model,
         retriever: s.retriever === 'dense' || s.retriever === 'hybrid' ? s.retriever : 'tfidf',
         language: s.language === 'en' ? 'en' : 'zh-Hant',
         cli_options: cliOptions,
+        runtime: readRuntime(s.runtime) || undefined,
       };
     }
 

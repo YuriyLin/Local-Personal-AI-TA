@@ -61,6 +61,12 @@ PDF 實體頁碼|Physical PDF page
 先給提示|Give a hint
 解釋概念|Explain a concept
 協助除錯|Help debug
+不支援文字生成|Text generation unsupported
+筆記標示的原 PDF|Original PDF referenced by note
+自動模式使用預設值。上下文與輸入 token 為保守估算，實際用量依模型而異。|Auto mode uses defaults. Context and input token budgets are estimates and vary by model.
+實際支援的參數取決於模型與供應商；部分模型可能忽略 temperature。本機 CLI 自行控制輸出長度與溫度。|Supported parameters vary by model and provider; some models may ignore temperature. Local CLI tools control their own output length and temperature.
+Top-k 控制初始檢索候選數；同頁或相鄰段落可能作為脈絡加入，最後仍受輸入預算限制。|Top-k controls initial retrieved candidates. Nearby passages may be added as context, subject to the input budget.
+直接提問|Ask directly
 你的問題|Your question
 例如：為什麼驗證集不能用來估計填補值？|For example, why not estimate missing values from the validation set?
 送出問題 →|Send question →
@@ -115,6 +121,10 @@ Markdown 內容|Markdown content
 已儲存筆記|Note saved
 開啟筆記編輯器|Edit note
 查看引用的內容|View source passages
+引用由模型選擇，請核對原文是否支持回答。|Citations are selected by the model. Check whether the passages support the answer.
+查看模型請求中的參考段落|View passages included in the model request
+查看未送出模型的檢索段落|View retrieved passages not sent to the model
+查看參考段落（傳送狀態未知）|View passages (request status unknown)
 教材段落|Passage
 你|You
 助教|Tutor
@@ -219,6 +229,17 @@ BIIBO 助教|BIIBO Tutor
 課程名稱|Course name
 課程|Lecture
 活動|Activity
+報告 / 活動|Presentation / Activity
+開啟課程總覽筆記|Open course overview note
+教材搜尋範圍|Material search scope
+目前課程|Current course
+全部教材|All materials
+此紀錄未標記課程，無法確認檢索範圍。|This record has no course label, so its search scope cannot be verified.
+伺服器未確認課程檢索範圍，請重新啟動後端。|The server did not confirm the course search scope. Restart the backend.
+查看詳情|View details
+備註|Notes
+尚未新增備註|No notes yet
+近期無排定考試或截止日|No upcoming exams or deadlines
 考試|Exam
 移動分類|Move folder
 移動|Move

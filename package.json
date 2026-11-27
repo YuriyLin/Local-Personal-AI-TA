@@ -8,7 +8,7 @@
     "start": "tsx server.ts",
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",

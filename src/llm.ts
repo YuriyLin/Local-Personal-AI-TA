@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
+import { modelCapabilities } from './runtime.js';
 import { CLI_REASONING_LEVELS, CliOptions, CliProvider, EngineGroup, ModelProvider, isCliProvider, store } from './store.js';
 
 export const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '');
@@ -20,6 +21,8 @@ export interface ChatCompletionOptions {
   jsonSchema?: Record<string, unknown>;
   expectJson?: boolean;
   maxTokens?: number;
+  contextTokens?: number;
+  canDisableThinking?: boolean | null;
   temperature?: number;
   timeoutMs?: number;
   cloudKey?: string;
@@ -32,6 +35,7 @@ export interface ChatCompletionResult {
   model: string;
   prompt_tokens: number | null;
   output_tokens: number | null;
+  reasoning_tokens?: number | null;
   done_reason?: string;
 }
 
@@ -408,6 +412,22 @@ function configuredCloudKey(provider: ModelProvider): string {
   return (typeof saved === 'string' && saved) || process.env[envVar]?.trim() || '';
 }
 
+export async function geminiTokenLimits(model: string): Promise<{ input_limit: number | null; output_limit: number | null }> {
+  const unknown = { input_limit: null, output_limit: null };
+  const key = configuredCloudKey('gemini');
+  if (!key) return unknown;
+  try {
+    const name = model.replace(/^models\//, '');
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(name)}`, {
+      headers: { 'x-goog-api-key': key }, redirect: 'manual', signal: AbortSignal.timeout(2500),
+    });
+    if (!response.ok) return unknown;
+    const data = await response.json() as { inputTokenLimit?: unknown; outputTokenLimit?: unknown };
+    const positive = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+    return { input_limit: positive(data.inputTokenLimit), output_limit: positive(data.outputTokenLimit) };
+  } catch { return unknown; }
+}
+
 function requireCloudKey(provider: ModelProvider, draft?: string): string {
   const key = draft || configuredCloudKey(provider);
   if (key) return key;
@@ -650,7 +670,7 @@ async function runOllamaChat(
     messages: opts.messages,
     stream: false,
     options: {
-      num_ctx: 8192,
+      num_ctx: opts.contextTokens ?? 8192,
       num_predict: opts.maxTokens ?? 1600,
       temperature: opts.temperature ?? 0.25,
     },
@@ -661,7 +681,9 @@ async function runOllamaChat(
     payload.format = 'json';
   }
   if (model.startsWith('qwen3.') || model.startsWith('qwen3:')) {
-    payload.think = false;
+    const supported = opts.canDisableThinking === undefined
+      ? (await modelCapabilities('ollama', model)).can_disable_thinking : opts.canDisableThinking;
+    if (supported === true) payload.think = false;
   }
 
   let res: Response;
@@ -688,7 +710,13 @@ async function runOllamaChat(
   }
 
   if (!res.ok) {
-    throw new LlmError(res.status >= 500 ? 502 : res.status, isEn() ? `Ollama returned HTTP ${res.status}.` : `Ollama 服務回應異常（HTTP ${res.status}），請確認已下載模型「${model}」。`);
+    const detail = await res.json().catch(() => null) as { error?: unknown } | null;
+    if (typeof detail?.error === 'string' && /MLX runtime is not available/i.test(detail.error)) {
+      throw new LlmError(502, isEn()
+        ? 'This model requires the unavailable MLX runtime. On Windows, select a GGUF model such as qwen3.5:4b-q4_K_M or qwen3.5:9b-q4_K_M.'
+        : '此模型需要目前無法使用的 MLX runtime。Windows 請選用 GGUF 版本，例如 qwen3.5:4b-q4_K_M 或 qwen3.5:9b-q4_K_M。');
+    }
+    throw new LlmError(res.status >= 500 ? 502 : res.status, isEn() ? `Ollama returned HTTP ${res.status}. Check the model and Ollama service.` : `Ollama 服務回應異常（HTTP ${res.status}），請檢查模型與 Ollama 服務。`);
   }
 
   const data = (await res.json()) as Record<string, unknown>;
@@ -821,6 +849,11 @@ async function runGeminiChat(model: string, opts: ChatCompletionOptions): Promis
   const config: Record<string, unknown> = {
     abortSignal: AbortSignal.timeout(opts.timeoutMs ?? 90_000),
   };
+  if (typeof opts.maxTokens === 'number') {
+    config.maxOutputTokens = opts.maxTokens;
+    config.automaticContinuation = false;
+  }
+  if (typeof opts.temperature === 'number') config.temperature = opts.temperature;
   if (systemParts.length) {
     config.systemInstruction = systemParts.join('\n\n');
   }
@@ -848,6 +881,8 @@ async function runGeminiChat(model: string, opts: ChatCompletionOptions): Promis
       model,
       prompt_tokens: typeof usage?.promptTokenCount === 'number' ? usage.promptTokenCount : null,
       output_tokens: typeof usage?.candidatesTokenCount === 'number' ? usage.candidatesTokenCount : null,
+      reasoning_tokens: typeof usage?.thoughtsTokenCount === 'number' ? usage.thoughtsTokenCount : null,
+      done_reason: response.candidates?.[0]?.finishReason === 'MAX_TOKENS' ? 'length' : response.candidates?.[0]?.finishReason,
     };
   } catch (err) {
     if (err instanceof LlmError) throw err;
@@ -961,7 +996,7 @@ async function runAnthropicChat(model: string, opts: ChatCompletionOptions): Pro
     model,
     prompt_tokens: typeof data.usage?.input_tokens === 'number' ? data.usage.input_tokens : null,
     output_tokens: typeof data.usage?.output_tokens === 'number' ? data.usage.output_tokens : null,
-    done_reason: data.stop_reason,
+    done_reason: data.stop_reason === 'max_tokens' ? 'length' : data.stop_reason,
   };
 }
 

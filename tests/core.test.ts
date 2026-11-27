@@ -4,8 +4,263 @@ import { cliGenerationArgs, isBlockedHost, isSafeModelName, isValidProvider, lis
 import { renderMarkdown, sanitizeLatexDelimiters } from '../src/markdown.js';
 import { MODEL_PROVIDERS, pruneInactiveDocuments, pruneOldJobs, readCliOptions, store } from '../src/store.js';
 import { classifySyllabusWeek, cleanGeneratedMarkdown, generateDocumentQuiz, stratifiedSamplePages } from '../src/study.js';
-import { expandPageEvidence, generateAnswer } from '../src/tutor.js';
+import { courseEvidence, courseHistory, expandPageEvidence, expandTextEvidence, generateAnswer, groupPageEvidence, isQuestionOptionEvidence, policyQuestion, searchQuery } from '../src/tutor.js';
 import type { EvidenceRow } from '../src/tutor.js';
+import type { CoursePlanRecord } from '../src/store.js';
+
+test('course history excludes other courses and unlabelled legacy turns', () => {
+  const turns = [{ course_id: 'a', question: 'a' }, { course_id: 'b', question: 'b' }, { question: 'legacy' }];
+  assert.deepEqual(courseHistory(turns, 'a'), [turns[0]]);
+  assert.deepEqual(courseHistory(turns, null), turns);
+});
+
+test('course requirement questions identify common bilingual wording', () => {
+  for (const q of ['老師規定要幾層？', '老師這次的評分比例是多少？', '作業 deadline 是哪天？',
+    'When is the assignment due?', 'What is the grading rubric for this homework?']) {
+    assert.equal(policyQuestion(q), true, q);
+  }
+  for (const q of ['為什麼 BCEWithLogitsLoss 不先加 Sigmoid？', 'What is binary classification?', '如何避免資料洩漏？']) {
+    assert.equal(policyQuestion(q), false, q);
+  }
+});
+
+test('successive follow-up retrieval keeps the original topic and the latest question', () => {
+  const history = [{ question: 'Titanic Age 缺失值應如何處理？' }, { question: '那測試集呢？' }];
+  assert.equal(searchQuery('為什麼？', history), 'Titanic Age 缺失值應如何處理？\n那測試集呢？\n為什麼？');
+  assert.equal(searchQuery('什麼是 Sigmoid？', history), '什麼是 Sigmoid？');
+  assert.equal(searchQuery('那測試集呢？', [history[0]]), 'Titanic Age 缺失值應如何處理？\n那測試集呢？');
+  const oldPolicy = [{ question: '老師規定 hidden layers 有幾層？' }];
+  assert.equal(searchQuery('為什麼 BCEWithLogitsLoss 不先加 Sigmoid？', oldPolicy), '為什麼 BCEWithLogitsLoss 不先加 Sigmoid？');
+  assert.equal(searchQuery('Why is sigmoid used?', oldPolicy), 'Why is sigmoid used?');
+  assert.equal(searchQuery('Why is that?', [history[0]]), `${history[0].question}\nWhy is that?`);
+  assert.equal(searchQuery('為什麼？', [{ question: '為什麼 BCEWithLogitsLoss 不先加 Sigmoid？' }, history[1]]),
+    `為什麼 BCEWithLogitsLoss 不先加 Sigmoid？\n${history[1].question}\n為什麼？`);
+});
+
+test('course evidence follows folder descendants and explicitly linked notes', () => {
+  const oldFolders = new Map(store.folders);
+  const oldInfo = new Map(store.documentInfo);
+  try {
+    store.folders.clear();
+    store.documentInfo.clear();
+    store.folders.set('root', { id: 'root', name: 'A', parent_id: null });
+    store.folders.set('child', { id: 'child', name: 'Week', parent_id: 'root' });
+    store.folders.set('other', { id: 'other', name: 'B', parent_id: null });
+    store.documentInfo.set('a', { document_id: 'a', summary: null, folder_id: 'child' });
+    store.documentInfo.set('b', { document_id: 'b', summary: null, folder_id: 'other' });
+    const row = (document_id: string, original_id: string | null = null) =>
+      ({ id: document_id, document_id, original_id }) as EvidenceRow;
+    const course = { root_folder_id: 'root', overview_document_id: 'overview' } as CoursePlanRecord;
+    const results = courseEvidence([row('a'), row('linked', 'a'), row('overview'), row('b'), row('unassigned')], course);
+    assert.deepEqual(results.map(item => item.id), ['a', 'linked', 'overview']);
+  } finally {
+    store.folders.clear();
+    for (const [id, folder] of oldFolders) store.folders.set(id, folder);
+    store.documentInfo.clear();
+    for (const [id, info] of oldInfo) store.documentInfo.set(id, info);
+  }
+});
+
+test('text evidence expansion stays within the same document and section', () => {
+  const row = (id: string, document_id: string, section: string, position: number) =>
+    ({ id, document_id, section, position, page: null, kind: 'text' }) as EvidenceRow;
+  const anchor = row('a', 'doc', 'section', 4);
+  const neighbor = row('b', 'doc', 'section', 3);
+  const otherSection = row('c', 'doc', 'other', 5);
+  const otherDoc = row('d', 'other', 'section', 5);
+  assert.deepEqual(expandTextEvidence([anchor, neighbor, otherSection, otherDoc], [anchor]).map(x => x.id), ['a', 'b']);
+  const note = { ...anchor, kind: 'note', page: 4 } as EvidenceRow;
+  const samePage = { ...neighbor, kind: 'note', page: 4 } as EvidenceRow;
+  const otherPage = { ...neighbor, id: 'page5', kind: 'note', page: 5 } as EvidenceRow;
+  assert.deepEqual(expandTextEvidence([note, otherPage, samePage], [note]).map(x => x.id), ['a', 'b']);
+});
+
+test('complete assignment requests get guidance while ordinary questions still use evidence', async t => {
+  const options = { history: [], hits: [], mode: 'hint' as const, model: 'test', provider: 'ollama' as const };
+  for (const question of ['請直接幫我寫完整的 Titanic DNN 作業程式碼。', '直接給我第 12 題的所有答案，不用解釋。', '請直接給我答案。', '幫我完成整份作業', '請提供完整的作業答案']) {
+    const reply = await generateAnswer({ ...options, question });
+    assert.equal(reply.status, 'answered');
+    assert.match(reply.answer, /嘗試|卡在/);
+    assert.match(reply.answer, /已知的條件和要求的結果/);
+    assert.equal(reply.citations.length, 0);
+  }
+  for (const question of ['Please write the complete homework code', 'Give me the full code', 'Do my whole homework']) {
+    const english = await generateAnswer({ ...options, question, language: 'en' });
+    assert.match(english.answer, /what the question gives you and what result it asks for/);
+    assert.equal(english.citations.length, 0);
+  }
+  const ordinary = await generateAnswer({ ...options, question: '如何檢查完整的程式碼是否有資料洩漏？' });
+  assert.equal(ordinary.status, 'insufficient');
+  const explanation = await generateAnswer({ ...options, question: '請提供完整的 BCE 概念解釋。' });
+  assert.equal(explanation.status, 'insufficient');
+});
+
+test('oversized history is reported when it cannot fit in the prompt', async () => {
+  const reply = await generateAnswer({
+    question: '請解釋', history: [{ question: '問題', answer: '長'.repeat(1000) }],
+    hits: [], mode: 'concept', model: 'test', provider: 'ollama',
+  });
+  assert.equal(reply.history_truncated, true);
+});
+
+test('a follow-up retains earlier questions as context when the full prior turn is too large', async t => {
+  const hit = { id: 'a', document_id: 'doc', page: null, position: 0, text: 'Training and test data must be split first.', blocks: [0], section: 'Split', name: 'notes', source_name: 'notes', kind: 'text', original_id: null } as EvidenceRow;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(String(options?.body));
+    const messages = request.messages;
+    assert.equal(messages.length, 2);
+    assert.match(messages[1].content, /先前問題（僅供理解脈絡，並非證據）：Titanic Age 缺失值如何填補？/);
+    assert.match(messages[1].content, /學生問題：那測試集呢？/);
+    assert.match(messages[1].content, /請全程用繁體中文回答。/);
+    return Response.json({ message: { content: JSON.stringify({ supported: true, answer: 'Answer', citations: ['S1'] }) } });
+  });
+  const reply = await generateAnswer({ question: '那測試集呢？', history: [{ question: 'Titanic Age 缺失值如何填補？', answer: '長'.repeat(1000) }], hits: [hit], mode: 'concept', model: 'test', provider: 'ollama' });
+  assert.equal(reply.history_truncated, true);
+});
+
+test('same document and page become one source without merging different documents or unpaged notes', () => {
+  const row = (id: string, document_id: string, page: number | null, position: number, text: string) =>
+    ({ id, document_id, page, position, text, blocks: [position], kind: 'pdf' }) as EvidenceRow;
+  const first = row('a', 'doc1', 15, 5, 'second');
+  const result = groupPageEvidence([
+    first, row('b', 'doc1', 15, 2, 'first'), row('c', 'doc2', 15, 1, 'other'),
+    row('d', 'doc1', 16, 1, 'next page'), row('e', 'note', null, 1, 'note one'),
+    row('f', 'note', null, 2, 'note two'), first,
+  ]);
+  assert.equal(result.length, 5);
+  assert.equal(result[0].id, 'a');
+  assert.equal(result[0].text, 'first\n\nsecond');
+  assert.deepEqual(result.slice(1).map(item => item.id), ['c', 'd', 'e', 'f']);
+});
+
+test('tutor sends one citation label for same-page excerpts and returns their combined evidence', async t => {
+  const rows = ['first relevant passage', 'second relevant passage'].map((text, position) => ({
+    id: `chunk-${position}`, document_id: 'doc', page: 15, position, text, blocks: [position],
+    section: 'Topic', name: 'slides.pdf', source_name: 'slides.pdf', kind: 'pdf', original_id: null,
+  })) as EvidenceRow[];
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(String(options?.body));
+    assert.match(request.messages.at(-1).content, /first relevant passage[\s\S]*second relevant passage/);
+    assert.deepEqual(request.format.properties.citations.items.enum, ['S1']);
+    return Response.json({ message: { content: JSON.stringify({ supported: true, answer: 'Explanation [S1]', citations: ['S1'] }) } });
+  });
+  const reply = await generateAnswer({ question: 'Explain the topic', history: [], hits: rows, mode: 'concept', model: 'test', provider: 'ollama' });
+  assert.equal(reply.status, 'answered');
+  assert.equal(reply.citations.length, 1);
+  assert.match(reply.citations[0].excerpt, /first relevant passage[\s\S]*second relevant passage/);
+  assert.equal(reply.retrieved_evidence?.[0]?.chunk_id, 'chunk-0');
+});
+
+test('the ranked passage is retained when earlier same-page text exceeds the evidence budget', async t => {
+  const base = { document_id: 'doc', page: 1, section: 'Topic', name: 'slides.pdf', source_name: 'slides.pdf', kind: 'pdf', original_id: null };
+  const rows = [
+    { ...base, id: 'ranked', position: 1, text: 'The relevant ranked passage.', blocks: [1] },
+    { ...base, id: 'earlier', position: 0, text: 'Unrelated earlier content. '.repeat(80), blocks: [0] },
+  ] as EvidenceRow[];
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(String(options?.body));
+    assert.match(request.messages.at(-1).content, /The relevant ranked passage/);
+    return Response.json({ message: { content: JSON.stringify({ supported: true, answer: 'Answer', citations: ['S1'] }) } });
+  });
+  const reply = await generateAnswer({ question: 'Explain the topic', history: [], hits: rows, mode: 'concept', model: 'test', provider: 'ollama' });
+  assert.equal(reply.status, 'answered');
+  assert.equal(reply.citations[0].chunk_id, 'ranked');
+  assert.match(reply.citations[0].excerpt, /The relevant ranked passage/);
+});
+
+test('insufficient model response retains retrieved passages without presenting them as citations', async t => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ message: { content: JSON.stringify({ supported: false, answer: '', citations: [] }) } }));
+  const hit = {
+    id: 'chunk', document_id: 'doc', page: null, position: 0, text: 'A source passage about a course topic.',
+    blocks: [0], section: 'Topic', name: 'notes.txt', source_name: 'notes.txt', kind: 'text', original_id: null,
+  } as EvidenceRow;
+  const reply = await generateAnswer({ question: 'Explain the topic', history: [], hits: [hit], mode: 'concept', model: 'test', provider: 'ollama' });
+  assert.equal(reply.status, 'insufficient');
+  assert.deepEqual(reply.citations, []);
+  assert.equal(reply.retrieved_evidence?.[0]?.chunk_id, 'chunk');
+  assert.equal(reply.evidence_in_model_request, true);
+});
+
+test('multiple-choice passages are not treated as factual evidence', async t => {
+  const exam = { id: 'exam', document_id: 'exam', page: 2, position: 1, text: '(B) Pearson near zero means independence.', blocks: [1], section: 'Part I. Multiple-Choice Questions', name: 'exam.pdf', source_name: 'exam.pdf', kind: 'pdf', original_id: null } as EvidenceRow;
+  const notes = { ...exam, id: 'notes', document_id: 'notes', page: null, section: 'Statistics', text: 'Zero correlation does not imply independence.', name: 'notes.md', kind: 'note' } as EvidenceRow;
+  const options = { question: 'Does zero correlation imply independence?', history: [], mode: 'concept' as const, model: 'test', provider: 'ollama' as const };
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(String(options?.body));
+    assert.match(request.messages.at(-1).content, /Zero correlation does not imply independence/);
+    assert.doesNotMatch(request.messages.at(-1).content, /Pearson near zero means independence/);
+    return Response.json({ message: { content: JSON.stringify({ supported: true, answer: 'No. [S1]', citations: ['S1'] }) } });
+  });
+  const onlyExam = await generateAnswer({ ...options, hits: [exam] });
+  assert.equal(onlyExam.status, 'insufficient');
+  assert.equal(onlyExam.evidence_in_model_request, false);
+  assert.equal(fetchMock.mock.callCount(), 0);
+  assert.equal(onlyExam.retrieved_evidence?.[0].chunk_id, 'exam');
+  assert.match(onlyExam.evidence_warning!, /選擇題/);
+  const mixed = await generateAnswer({ ...options, hits: [exam, notes], quote: exam.text });
+  assert.equal(mixed.status, 'answered');
+  assert.equal(mixed.evidence_in_model_request, true);
+  assert.equal(mixed.citations[0].chunk_id, 'notes');
+  assert.match(mixed.evidence_warning!, /選擇題/);
+  const regular = await generateAnswer({ ...options, hits: [notes] });
+  assert.equal(regular.status, 'answered');
+  assert.equal(regular.evidence_warning, undefined);
+});
+
+test('question headings identify options without suppressing ordinary notes', () => {
+  const hit = { kind: 'pdf', blocks: [], section: '8. Which of the following statements about overfitting is(are) correct?' } as EvidenceRow;
+  assert.equal(isQuestionOptionEvidence(hit), true);
+  assert.equal(isQuestionOptionEvidence({ ...hit, section: '下列關於分類的敘述何者錯誤？' }), true);
+  assert.equal(isQuestionOptionEvidence({ ...hit, section: 'Why is correct preprocessing necessary?' }), false);
+  assert.equal(isQuestionOptionEvidence({ ...hit, kind: 'note' }), false);
+});
+
+test('question option detection follows blocks across pages and stops at an answer boundary', () => {
+  const id = 'question-detection-test';
+  const old = store.documents.get(id);
+  const text = [
+    '## 答案 : (C)(D)',
+    '**6.** Which of these statements is **correct**?',
+    '(A) A claim on page one.',
+    '(B) A claim on page two.',
+    '答案 : (A)',
+    '(A) An unrelated item after the answer.',
+  ];
+  try {
+    store.documents.set(id, { id, blocks: text.map((value, i) => ({ text: value, page: i < 3 ? 1 : 2 })) } as any);
+    const hit = { kind: 'pdf', document_id: id, section: '答案 : (C)(D)', blocks: [3] } as EvidenceRow;
+    assert.equal(isQuestionOptionEvidence(hit), true);
+    assert.equal(isQuestionOptionEvidence({ ...hit, blocks: [5] }), false);
+    assert.equal(isQuestionOptionEvidence({ ...hit, blocks: [1] }), false);
+  } finally {
+    if (old) store.documents.set(id, old);
+    else store.documents.delete(id);
+  }
+});
+
+test('adds valid inline citations omitted from the model citation list', async t => {
+  const rows = ['first source', 'second source'].map((text, position) => ({
+    id: `chunk-${position}`, document_id: `doc-${position}`, page: null, position, text, blocks: [0],
+    section: 'Topic', name: 'notes', source_name: 'notes', kind: 'text', original_id: null,
+  })) as EvidenceRow[];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    message: { content: JSON.stringify({ supported: true, answer: 'Explanation [S1] and [S2].', citations: ['S2'] }) },
+  }));
+  const reply = await generateAnswer({ question: 'Explain', history: [], hits: rows, mode: 'concept', model: 'test', provider: 'ollama' });
+  assert.equal(reply.status, 'answered');
+  assert.deepEqual(reply.citations.map(c => c.label), ['S2', 'S1']);
+});
+
+test('rejects inline citation labels absent from supplied evidence', async t => {
+  const hit = { id: 'a', document_id: 'doc', page: null, position: 0, text: 'Relevant course material.', blocks: [0], section: 'Topic', name: 'notes', source_name: 'notes', kind: 'text', original_id: null } as EvidenceRow;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ message: { content: JSON.stringify({ supported: true, answer: 'Explanation [S2]', citations: ['S1'] }) } }));
+  const reply = await generateAnswer({ question: 'Explain', history: [], hits: [hit], mode: 'concept', model: 'test', provider: 'ollama' });
+  assert.equal(reply.status, 'error');
+  assert.equal(reply.citations.length, 0);
+  assert.equal(reply.retrieved_evidence?.length, 1);
+  assert.equal(reply.evidence_in_model_request, true);
+});
 
 test('Markdown renders bare line breaks in tables while preserving code and blocking active HTML', () => {
   const html = renderMarkdown('| Column |\n| --- |\n| First<br/>Second &lt;br&gt;Third |\n\n`<br>` <script>alert(1)</script>');
@@ -279,7 +534,9 @@ test('a quiz rejects invalid answers and citations to pages omitted from that ba
   });
   const question = { options: ['A', 'B', 'C', 'D'], correct_index: 2 };
   let batch = 0;
-  t.mock.method(globalThis, 'fetch', async () => Response.json({ message: { content: JSON.stringify({
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    if (String(url).endsWith('/api/show')) return Response.json({ thinking: { values: [false, true] } });
+    return Response.json({ message: { content: JSON.stringify({
     questions: ++batch === 1 ? [
       { ...question, stem: 'Invalid index', page_ref: 1, correct_index: 99 },
       { ...question, stem: 'Valid first batch\n\noptions: [A, B, C, D]\n\ncorrect_index: 2', page_ref: 2 },
@@ -288,7 +545,8 @@ test('a quiz rejects invalid answers and citations to pages omitted from that ba
       { ...question, stem: 'Valid second batch', page_ref: 4 },
       { ...question, stem: 'Invalid choice position', page_ref: 3, options: ['', 'B', 'C', 'D'] },
     ],
-  }) } }));
+  }) } });
+  });
   const quiz = await generateDocumentQuiz({ documentId: 'quiz-test', scope: 'full', page: null, count: 5 });
   assert.deepEqual(quiz.questions.map(({ stem, page_ref }) => [stem, page_ref]), [
     ['Valid first batch', 2], ['Valid second batch', 4],

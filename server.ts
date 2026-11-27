@@ -6,6 +6,7 @@ import multer from 'multer';
 import { ingestDocument, MAX_UPLOAD } from './src/ingest.js';
 import { migrateLegacyStore } from './src/migrate.js';
 import { renderMarkdown } from './src/markdown.js';
+import { autoTopK, DEFAULT_RUNTIME, modelCapabilities, readRuntime, resolveRuntime } from './src/runtime.js';
 import { animateMascotAssets, getMascotStatus } from './src/mascot.js';
 import { isCliProvider, nextSeq, loadStore, persistStoreNow, Preferences, pruneInactiveDocuments, pruneOldJobs, readCliOptions, schedulePersist, store } from './src/store.js';
 import type { CoursePlanRecord, RecordEntry } from './src/store.js';
@@ -35,6 +36,7 @@ import {
 import {
   discoverCliModels,
   discoverEngines,
+  geminiTokenLimits,
   getEngineDescriptor,
   isSafeModelName,
   isValidProvider,
@@ -47,7 +49,7 @@ import {
   saveCloudKey,
   testEngineConnection,
 } from './src/llm.js';
-import { evidenceRows, expandPageEvidence, generateAnswer, policyQuestion, retrieve, searchQuery } from './src/tutor.js';
+import { courseEvidence, courseHistory, evidenceRows, expandPageEvidence, expandTextEvidence, generateAnswer, policyQuestion, retrieveWithRetry, searchQuery } from './src/tutor.js';
 
 const ROOT = process.cwd();
 const WEB_DIR = path.join(ROOT, 'aita', 'web');
@@ -813,6 +815,17 @@ app.get('/api/settings', (_req, res) => {
   res.json(store.settings);
 });
 
+app.get('/api/runtime/capabilities', async (req, res) => {
+  const provider = req.query.provider;
+  const model = req.query.model;
+  if (!isValidProvider(provider) || !isSafeModelName(model)) throw httpError(422, '無效的模型引擎或名稱。');
+  const [capabilities, limits] = await Promise.all([
+    modelCapabilities(provider, model),
+    provider === 'gemini' ? geminiTokenLimits(model) : Promise.resolve({ input_limit: null, output_limit: null }),
+  ]);
+  res.json({ ...capabilities, ...limits });
+});
+
 app.put('/api/settings', (req, res) => {
   const body = (req.body || {}) as Record<string, unknown>;
   const mode = body.mode;
@@ -821,7 +834,7 @@ app.put('/api/settings', (req, res) => {
   const retriever = body.retriever;
   const language = body.language;
 
-  if (mode !== 'hint' && mode !== 'concept' && mode !== 'debug') {
+  if (mode !== 'hint' && mode !== 'concept' && mode !== 'debug' && mode !== 'ask') {
     throw httpError(422, '無效的教學方式。');
   }
   if (!isValidProvider(providerInput)) {
@@ -845,7 +858,9 @@ app.put('/api/settings', (req, res) => {
   }
   const key = parseCloudKey(body.api_key);
   if (key) saveCloudKey(providerInput, key);
-  const next: Preferences = { mode, provider: providerInput, model, retriever, language, cli_options: cliOptions };
+  const runtime = body.runtime === undefined ? store.settings.runtime : readRuntime(body.runtime);
+  if (body.runtime !== undefined && !runtime) throw httpError(422, '無效的進階 AI 設定。');
+  const next: Preferences = { mode, provider: providerInput, model, retriever, language, cli_options: cliOptions, runtime: runtime || undefined };
   store.settings = next;
   schedulePersist();
   res.json(next);
@@ -904,8 +919,8 @@ app.post('/api/ask', async (req, res, next) => {
     const conversationId = typeof body.conversation_id === 'string' && body.conversation_id ? body.conversation_id : null;
     const chunkId = typeof body.chunk_id === 'string' && body.chunk_id ? body.chunk_id : null;
     const modeInput = body.mode;
-    const mode: 'hint' | 'concept' | 'debug' =
-      modeInput === 'hint' || modeInput === 'concept' || modeInput === 'debug' ? modeInput : store.settings.mode;
+    const mode: 'hint' | 'concept' | 'debug' | 'ask' =
+      modeInput === 'hint' || modeInput === 'concept' || modeInput === 'debug' || modeInput === 'ask' ? modeInput : store.settings.mode;
 
     const rawScope = body.scope && typeof body.scope === 'object' ? (body.scope as Record<string, unknown>) : null;
     const scope = rawScope
@@ -927,8 +942,17 @@ app.post('/api/ask', async (req, res, next) => {
 
     try {
       const prefs = store.settings;
+      const [capabilities, tokenLimits] = await Promise.all([
+        modelCapabilities(prefs.provider, prefs.model),
+        prefs.provider === 'gemini' ? geminiTokenLimits(prefs.model) : Promise.resolve({ input_limit: null, output_limit: null }),
+      ]);
+      if (capabilities.can_chat === false) throw httpError(422, '此模型未提供文字生成能力，請選擇支援對話的模型。');
+      const runtime = { ...resolveRuntime(prefs.runtime || DEFAULT_RUNTIME, capabilities.context_limit, tokenLimits), can_disable_thinking: capabilities.can_disable_thinking };
       const historyRaw = conversationId ? loadTurns(conversationId) : [];
-      const history = historyRaw
+      const courseId = typeof body.course_id === 'string' && body.course_id ? body.course_id : null;
+      if (courseId) requiredCoursePlan(courseId);
+      const historyInCourse = courseHistory(historyRaw, courseId);
+      const history = historyInCourse
         .filter((t) => t.status !== 'error')
         .map((t) => ({ question: String(t.question || ''), answer: String(t.answer || '') }));
 
@@ -951,6 +975,9 @@ app.post('/api/ask', async (req, res, next) => {
             (blockSet.size === 0 || r.blocks.some((b) => blockSet.has(b)))
         );
         chosen = null;
+      } else if (courseId) {
+        rows = courseEvidence(rows, requiredCoursePlan(courseId));
+        if (chosen && !rows.some(row => row.id === chosen!.id)) chosen = null;
       }
 
       const start = performance.now();
@@ -962,17 +989,17 @@ app.post('/api/ask', async (req, res, next) => {
 
       const quote = scope && rows.length ? scope.quote : '';
       const retrievalQuery = quote ? `${quote}\n${query}` : query;
-      const retrieved = await retrieve(rows, retrievalQuery, prefs.retriever);
+      if (runtime.mode === 'auto') runtime.top_k = autoTopK(runtime.context, q);
+      const retrieved = await retrieveWithRetry(rows, retrievalQuery, q, prefs.retriever, runtime.top_k);
       let hits = retrieved.hits;
       if (scope?.page && !scope.blocks.length && !quote && hits.length) {
         hits = expandPageEvidence(rows, hits);
-      } else if (scope && rows.length && !hits.length) {
-        hits = rows.slice(0, 3);
       }
       const retrievalMs = Math.round(performance.now() - start);
       if (chosen) {
-        hits = [chosen, ...hits.filter((r) => r.id !== chosen!.id)].slice(0, 3);
+        hits = [chosen, ...hits.filter((r) => r.id !== chosen!.id)].slice(0, runtime.top_k);
       }
+      if (!scope) hits = expandTextEvidence(rows, hits, Math.max(runtime.top_k, 5), retrievalQuery);
 
       const reply = await generateAnswer({
         question: q,
@@ -983,6 +1010,7 @@ app.post('/api/ask', async (req, res, next) => {
         model: prefs.model,
         quote,
         language: prefs.language,
+        runtime,
       });
 
       const result: Record<string, unknown> = {
@@ -990,15 +1018,50 @@ app.post('/api/ask', async (req, res, next) => {
         citations: reply.citations,
         prompt_tokens: reply.prompt_tokens,
         output_tokens: reply.output_tokens,
+        reasoning_tokens: reply.reasoning_tokens,
         answer: reply.answer,
         status: reply.status,
         mode,
         retriever: retrieved.method,
         retrieval_ms: retrievalMs,
-        warning: retrieved.warning || null,
+        retrieval_attempts: retrieved.attempts,
+        runtime,
+        course_id: courseId,
+        search_scope: scope
+          ? (prefs.language === 'en' ? 'Selected material' : '選取教材')
+          : courseId
+            ? (prefs.language === 'en' ? 'Selected course and linked notes' : '目前課程及關聯筆記')
+            : (prefs.language === 'en' ? 'All materials' : '全部教材'),
+        warning: [
+          retrieved.warning,
+          runtime.model_limit === null ? (prefs.language === 'en' ? 'Model context limit is unknown; the configured budget is an estimate.' : '無法偵測模型上下文上限，目前預算僅為估算。') : null,
+          isCliProvider(prefs.provider) ? (prefs.language === 'en' ? 'CLI controls its own output length and temperature.' : 'CLI 的輸出長度與溫度由 CLI 自行控制。') : null,
+          reply.evidence_warning,
+          courseId && !scope && reply.status === 'insufficient'
+            ? (prefs.language === 'en'
+              ? 'Check whether the material is filed under this course. To search across courses, select All materials.'
+              : '請檢查教材是否歸入目前課程；如需跨課程查詢，可手動選擇「全部教材」。')
+            : null,
+          courseId && historyInCourse.length < historyRaw.length
+            ? (prefs.language === 'en'
+              ? 'Earlier turns from another course or without a course label were omitted from context.'
+              : '其他課程或未標記課程的舊對話未納入本次上下文。')
+            : null,
+          prefs.provider === 'ollama' && /^qwen3\.5:(?:0\.8|2)b(?::latest)?$/i.test(prefs.model) && reply.status === 'answered' && reply.citations.length
+            ? (prefs.language === 'en'
+              ? `In local tests, ${prefs.model} made substantial errors even with relevant sources. Check this answer against the cited material.`
+              : `本機測試中 ${prefs.model} 曾在引用相關教材時產生重大錯誤，請對照引用內容核對回答。`)
+            : null,
+          reply.history_truncated
+            ? (prefs.language === 'en' ? 'Some earlier conversation was omitted due to the context limit.' : '對話超出上下文預算，部分較早對話未送入模型。')
+            : null,
+        ].filter(Boolean).join(' ') || null,
         latency_ms: Math.round(performance.now() - start),
       };
-      if (reply.retrieved_evidence?.length) result.retrieved_evidence = reply.retrieved_evidence;
+      if (reply.retrieved_evidence?.length) {
+        result.retrieved_evidence = reply.retrieved_evidence;
+        result.evidence_in_model_request = reply.evidence_in_model_request;
+      }
       if (scope) {
         result.scope = scope;
       }
@@ -1068,7 +1131,7 @@ app.post('/api/records/import', upload.single('file'), (req, res) => {
       if (payload.schema !== 'aita-records-v1') throw new Error();
       if (!Array.isArray(payload.conversations) || !Array.isArray(payload.records)) throw new Error();
 
-      type ImportedTurn = { question: string; answer: string; citations?: unknown; archived_citations?: unknown };
+      type ImportedTurn = { question: string; answer: string; course_id?: unknown; citations?: unknown; archived_citations?: unknown };
       type ImportedChat = { title: string; turns: ImportedTurn[] };
       const conversations = payload.conversations as ImportedChat[];
       const records = payload.records as Array<Pick<RecordEntry, 'name' | 'content'>>;
@@ -1089,6 +1152,9 @@ app.post('/api/records/import', upload.single('file'), (req, res) => {
         });
         for (const t of chat.turns) {
           const metadata: Record<string, unknown> = { status: 'imported', citations: [] };
+          if (typeof t.course_id === 'string' && store.coursePlans.has(t.course_id)) {
+            metadata.course_id = t.course_id;
+          }
           const archived = t.citations || t.archived_citations;
           if (Array.isArray(archived)) metadata.archived_citations = archived;
           store.turns.push({

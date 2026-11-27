@@ -30,6 +30,10 @@ Desktop.ini
 # Local course materials, application state and submission artifacts
 /data/
 /aita/data/
+# Local evaluation cases, outputs, and report may contain course excerpts and conversations
+/evaluation/*.json
+/evaluation/REPORT.md
+/evaluation/SUMMARY.md
 /aita/FINAL-REPORT.md
 /AI_Tutor_Lab_Starter_English/
 /test_screenshot/

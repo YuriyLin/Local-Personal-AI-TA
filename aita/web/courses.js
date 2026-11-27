@@ -207,6 +207,22 @@
   // ============================================================
   // Calendar Event Projection & Filtering
   // ============================================================
+  function milestoneKind(title, fallback = "activity") {
+    const text = String(title || "").normalize("NFKC");
+    if (/\b(?:deadline|due|submit|submission|turn\s+in)\b|截止|繳交|提交/i.test(text)) return "deadline";
+    if (/\b(?:presentations?|reports?|demos?|reviews?|discussions?)\b|發表|展示|報告|檢討/i.test(text)) return "activity";
+    return /\b(?:mid[\s-]?terms?|final\s+exams?|exams?|quiz(?:zes)?|tests?)\b|期中考|期末考|考試|小考|測驗/i.test(text) ? "exam" : fallback;
+  }
+
+  function calendarTypeLabel(type) {
+    return type === "activity" ? tr("報告 / 活動") : weekTypeLabel(type);
+  }
+
+  function milestoneDate(event, anchor, weekdays, year) {
+    return parseExplicitDate(event.date, year) || parseExplicitDate(event.title, year)
+      || (event.week ? projectWeekDates(anchor, event.week, weekdays)[0] : null);
+  }
+
   function buildAllCalendarItems() {
     const byDate = new Map();
     const pushItem = (date, item) => {
@@ -224,16 +240,16 @@
       const weekdays = course.schedule?.weekdays?.length ? course.schedule.weekdays : [1];
       const anchorYear = anchor && isValidIso(anchor) ? Number(anchor.slice(0, 4)) : viewYear;
 
-      const examWeekDateMap = new Map();
+      const weeksByDateAndTitle = new Map();
       if (anchor && isValidIso(anchor)) {
         for (const week of course.weeks || []) {
           const dates = projectWeekDates(anchor, week.week_number, weekdays);
-          const type = week.week_type || "lecture";
+          const type = week.week_type === "exam" && milestoneKind(week.title, "exam") !== "exam"
+            ? "activity" : week.week_type || "lecture";
           // Lectures & holidays appear on all meeting weekdays; pure exams/activities appear on the primary meeting day.
           const targetDates = (type === "lecture" || type === "holiday") ? dates : dates.slice(0, 1);
           for (const d of targetDates) {
-            if (type === "exam") examWeekDateMap.set(`${d}::${week.title.toLowerCase()}`, true);
-            pushItem(d, {
+            const item = {
               id: `week-${course.id}-${week.week_number}-${d}`,
               date: d,
               kind: "course_week",
@@ -245,26 +261,29 @@
               title: week.title,
               shortLabel: `W${week.week_number}`,
               time: ""
-            });
+            };
+            weeksByDateAndTitle.set(`${d}::${week.title.toLowerCase()}`, item);
+            pushItem(d, item);
           }
         }
       }
 
       for (let i = 0; i < (course.exams || []).length; i++) {
         const ex = course.exams[i];
-        let date = parseExplicitDate(ex.date, anchorYear);
-        if (!date && ex.week && anchor && isValidIso(anchor)) {
-          const projected = projectWeekDates(anchor, ex.week, weekdays);
-          date = projected[0] || null;
-        }
+        const date = milestoneDate(ex, anchor, weekdays, anchorYear);
         if (!date) continue;
-        if (examWeekDateMap.has(`${date}::${String(ex.title || "").toLowerCase()}`)) continue;
+        const matchingWeek = weeksByDateAndTitle.get(`${date}::${String(ex.title || "").toLowerCase()}`);
+        if (matchingWeek && !matchingWeek.exam) {
+          matchingWeek.exam = ex;
+          continue;
+        }
+        const type = milestoneKind(ex.title) === "exam" ? "exam" : "activity";
         pushItem(date, {
           id: `exam-${course.id}-${i}-${date}`,
           date,
           kind: "course_exam",
-          eventType: "exam",
-          visualWeight: 3,
+          eventType: type,
+          visualWeight: type === "exam" ? 3 : 2,
           course,
           exam: ex,
           palette: p,
@@ -302,7 +321,7 @@
         if (activeTypeFilter === "all") return true;
         if (activeTypeFilter === "custom") return item.kind === "custom";
         if (activeTypeFilter === "exam") return item.eventType === "exam";
-        return item.kind === "course_week" && item.eventType === activeTypeFilter;
+        return item.kind !== "custom" && item.eventType === activeTypeFilter;
       });
       if (!kept.length) continue;
       kept.sort((a, b) => {
@@ -324,30 +343,31 @@
     const anchorYear = anchor && isValidIso(anchor) ? Number(anchor.slice(0, 4)) : new Date().getFullYear();
 
     const candidates = [];
+    const add = (title, date, kind) => {
+      if (!date || date < today) return;
+      const days = diffUtcDays(today, date);
+      if (days <= 30) candidates.push({ title, date, days, urgent: kind !== "activity" });
+    };
+    const scheduledWeeks = new Set();
     for (const ex of course.exams || []) {
-      let date = parseExplicitDate(ex.date, anchorYear);
-      if (!date && ex.week && anchor && isValidIso(anchor)) {
-        date = projectWeekDates(anchor, ex.week, weekdays)[0] || null;
-      }
-      if (date && date >= today) {
-        candidates.push({ title: ex.title, date, days: diffUtcDays(today, date) });
-      }
+      const date = milestoneDate(ex, anchor, weekdays, anchorYear);
+      if (date && ex.week) scheduledWeeks.add(ex.week);
+      add(ex.title, date, milestoneKind(ex.title));
     }
-    if (anchor && isValidIso(anchor)) {
-      for (const week of course.weeks || []) {
-        if (week.week_type !== "exam" && !week.milestone) continue;
-        const date = projectWeekDates(anchor, week.week_number, weekdays)[0];
-        if (date && date >= today) {
-          candidates.push({
-            title: week.milestone || week.title,
-            date,
-            days: diffUtcDays(today, date)
-          });
-        }
+    for (const week of course.weeks || []) {
+      if (scheduledWeeks.has(week.week_number) || (week.week_type !== "exam" && !week.milestone)) continue;
+      const title = week.milestone || week.title;
+      const weekKind = milestoneKind(week.title, week.week_type === "exam" ? "exam" : "activity");
+      add(title, milestoneDate({ title, week: week.week_number }, anchor, weekdays, anchorYear), milestoneKind(title, weekKind));
+    }
+    for (const event of customEvents) {
+      if (event.course_id === course.id && !event.completed && (event.category === "exam" || event.category === "deadline")) {
+        add(event.title, event.date, event.category);
       }
     }
     candidates.sort((a, b) => a.date.localeCompare(b.date));
-    return candidates[0] || null;
+    const upcoming = candidates.find(item => item.urgent);
+    return { next: upcoming || candidates[0], upcoming };
   }
 
   // ============================================================
@@ -377,8 +397,8 @@
       const weeks = course.weeks || [];
       const lectureWeeks = weeks.filter(w => w.requires_material !== false && (w.week_type || "lecture") === "lecture");
       const readyWeeks = lectureWeeks.filter(w => Number(w.material_count || 0) > 0);
-      const missingCount = Math.max(0, lectureWeeks.length - readyWeeks.length);
       const pct = lectureWeeks.length ? Math.round((readyWeeks.length / lectureWeeks.length) * 100) : 100;
+      const { next, upcoming } = findNextMilestone(course);
 
       const card = element("article", undefined, "course-card");
       card.style.setProperty("--course-accent", p.accent);
@@ -392,7 +412,50 @@
       const dot = element("span", undefined, "course-color-dot");
       dot.setAttribute("aria-hidden", "true");
       const titleEl = element("h3", course.course_title, "course-card-title");
+      titleEl.title = course.course_title;
       titleGroup.append(dot, titleEl);
+
+      const titleRow = element("div", undefined, "course-card-title-row");
+      titleRow.append(titleGroup);
+      if (upcoming) {
+        const text = upcoming.days === 0 ? (english() ? "Today" : "今天")
+          : (english() ? `In ${upcoming.days}d` : `${upcoming.days} 天後`);
+        const badge = element("span", text, "course-card-countdown");
+        badge.title = upcoming.title;
+        titleRow.append(badge);
+      }
+      const menu = element("div", undefined, "course-card-menu");
+      menu.id = `course-card-actions-${course.id}`;
+      menu.setAttribute("popover", "auto");
+      const menuButton = element("button", "⋯", "course-card-menu-button");
+      menuButton.type = "button";
+      menuButton.title = english() ? "Course actions" : "課程操作";
+      menuButton.setAttribute("aria-label", `${menuButton.title} · ${course.course_title}`);
+      menuButton.setAttribute("popovertarget", menu.id);
+      const closeMenu = () => {
+        menu.hidePopover();
+        menuButton.focus();
+      };
+      menu.append(
+        button(english() ? "Update syllabus (AI re-import)" : "更新課綱（AI 重新匯入）", () => {
+          closeMenu();
+          window.openSyllabusDialogForCourse?.(course);
+        }),
+        button(english() ? "Remove course plan" : "移除課程規劃", async () => {
+          closeMenu();
+          if (!window.confirm(english()
+            ? `Remove the plan for “${course.course_title}”? Materials, notes, and folders are kept.`
+            : `移除「${course.course_title}」的課程規劃？已上傳的教材、筆記與資料夾會保留。`)) return;
+          menuButton.disabled = true;
+          try {
+            await deleteCourse(course.id);
+            (grid.querySelector(".course-card-menu-button") || $("courses-empty-create"))?.focus();
+          } finally {
+            menuButton.disabled = false;
+          }
+        }, "course-card-remove")
+      );
+      titleRow.append(menuButton, menu);
 
       const scheduleMeta = element("p", undefined, "course-card-schedule");
       const schedParts = [formatWeekdayList(course.schedule?.weekdays)];
@@ -403,48 +466,41 @@
           : `開學 ${course.schedule.start_date_override}`);
       }
       scheduleMeta.textContent = schedParts.join(" · ");
-      head.append(titleGroup, scheduleMeta);
+      scheduleMeta.title = scheduleMeta.textContent;
+      head.append(titleRow, scheduleMeta);
 
       // Unboxed inline metadata row (zero-pill discipline)
       const metaRow = element("p", undefined, "course-card-meta");
-      const metaParts = english()
-        ? [
-            `${weeks.length} units`,
-            `${readyWeeks.length}/${lectureWeeks.length} slides ready`,
-            missingCount > 0 ? `${missingCount} missing` : "All caught up"
-          ]
-        : [
-            `${weeks.length} 週單元`,
-            `${readyWeeks.length}/${lectureWeeks.length} 講義已備齊`,
-            missingCount > 0 ? `尚缺 ${missingCount} 份` : "講義已全數備齊"
-          ];
-      metaRow.textContent = metaParts.join(" · ");
+      metaRow.append(element("span", english()
+        ? `${weeks.length} units · Slides ${readyWeeks.length}/${lectureWeeks.length}`
+        : `${weeks.length} 週單元 · 講義 ${readyWeeks.length}/${lectureWeeks.length}`));
+      metaRow.append(element("span", `${pct}%`, "course-progress-pct"));
 
       // Progress track
-      const progWrap = element("div", undefined, "course-progress-wrap");
       const track = element("div", undefined, "course-progress-track");
       track.setAttribute("role", "progressbar");
+      track.setAttribute("aria-label", english() ? "Slide coverage" : "講義備齊進度");
       track.setAttribute("aria-valuemin", "0");
       track.setAttribute("aria-valuemax", "100");
       track.setAttribute("aria-valuenow", String(pct));
       const fill = element("div", undefined, "course-progress-fill");
       fill.style.width = `${pct}%`;
       track.append(fill);
-      const pctLabel = element("span", `${pct}%`, "course-progress-pct");
-      progWrap.append(track, pctLabel);
 
       // Next milestone or summary
-      const next = findNextMilestone(course);
       const footInfo = element("p", undefined, next ? "course-card-milestone" : "course-card-summary");
       if (next) {
-        const dayText = next.days === 0
-          ? (english() ? "Today" : "就是今天")
-          : (english() ? `in ${next.days}d` : `還有 ${next.days} 天`);
-        footInfo.textContent = english()
-          ? `Next: ${next.title} · ${next.date} (${dayText})`
-          : `近期里程碑：${next.title} · ${next.date}（${dayText}）`;
+        const year = Number(next.date.slice(0, 4));
+        const datePattern = /\s*[（(]((?:\d{4}[-/.])?\d{1,2}[-/.]\d{1,2})(?:\s*\([a-z.]+\))?\s*[)）]|\b(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}\/\d{1,2})\b/gi;
+        const name = next.title.trim().replace(datePattern,
+          (match, wrapped) => parseExplicitDate(wrapped || match, year) === next.date ? "" : match)
+          .trim().replace(/[-·–／/\s]+$/, "");
+        const shortDate = next.date.slice(5).replace("-", "/");
+        footInfo.append(element("span", name || next.title, "course-card-milestone-text"), element("span", `· ${shortDate}`));
+        footInfo.title = `${name || next.title} · ${shortDate}`;
       } else {
-        footInfo.textContent = course.summary || (english() ? "No upcoming milestones scheduled." : "尚未設定近期考試或里程碑。");
+        footInfo.textContent = course.summary?.trim() || tr("近期無排定考試或截止日");
+        footInfo.title = footInfo.textContent;
       }
 
       // Action bar
@@ -453,23 +509,15 @@
       openWs.href = `/?course=${encodeURIComponent(course.id)}`;
 
       const editBtn = button(
-        english() ? "Edit schedule" : "編輯課綱與排程",
+        english() ? "Edit & schedule" : "編輯與排程",
         () => openCourseEditor(course),
         "course-card-btn"
       );
 
-      const reimportBtn = button(
-        english() ? "Re-import" : "更新課綱",
-        () => {
-          if (typeof window.openSyllabusDialogForCourse === "function") {
-            window.openSyllabusDialogForCourse(course);
-          }
-        },
-        "course-card-btn"
-      );
-
-      actions.append(openWs, editBtn, reimportBtn);
-      card.append(head, metaRow, progWrap, footInfo, actions);
+      actions.append(openWs, editBtn);
+      const info = element("div", undefined, "course-card-info");
+      info.append(metaRow, track, footInfo);
+      card.append(head, info, actions);
       frag.append(card);
     }
 
@@ -488,7 +536,7 @@
             ["lecture", "Lectures"],
             ["exam", "Exams"],
             ["holiday", "Holidays"],
-            ["activity", "Activities"],
+            ["activity", calendarTypeLabel("activity")],
             ["custom", "Custom"]
           ]
         : [
@@ -496,7 +544,7 @@
             ["lecture", "授課"],
             ["exam", "考試"],
             ["holiday", "放假"],
-            ["activity", "活動"],
+            ["activity", calendarTypeLabel("activity")],
             ["custom", "自訂"]
           ];
       const frag = document.createDocumentFragment();
@@ -585,7 +633,7 @@
     if (item.visualWeight === 2) {
       // Mid weight: soft hairline tag for holiday / activity
       const tag = element("div", undefined, `cal-evt-mid is-${item.eventType}`);
-      const prefix = element("span", weekTypeLabel(item.eventType), "cal-evt-prefix");
+      const prefix = element("span", calendarTypeLabel(item.eventType), "cal-evt-prefix");
       const text = element("span", item.title, "cal-evt-text");
       tag.append(prefix, text);
       return tag;
@@ -682,6 +730,32 @@
   // ============================================================
   // Rendering: Selected Day Detail Panel
   // ============================================================
+  function openMilestoneDetails({ course, exam, date }) {
+    const weekLabel = exam.week ? (english() ? `Week ${exam.week}` : `第 ${exam.week} 週`) : "";
+    $("cal-milestone-title").textContent = exam.title;
+    $("cal-milestone-course").textContent = [course.course_title, weekLabel].filter(Boolean).join(" · ");
+    const dateLabel = $("cal-milestone-date");
+    dateLabel.dateTime = date;
+    dateLabel.textContent = `${formatDisplayDate(date)} · ${formatDisplayWeekday(date)}`;
+    $("cal-milestone-type").textContent = calendarTypeLabel(milestoneKind(exam.title) === "exam" ? "exam" : "activity");
+    $("cal-milestone-notes").textContent = exam.notes?.trim() || tr("尚未新增備註");
+
+    const overview = $("cal-milestone-overview");
+    overview.hidden = !course.overview_document_id;
+    if (course.overview_document_id) {
+      overview.href = `/?course=${encodeURIComponent(course.id)}&doc=${encodeURIComponent(course.overview_document_id)}`;
+    } else {
+      overview.removeAttribute("href");
+    }
+    $("calendar-milestone-dialog").showModal();
+  }
+
+  function milestoneDetailsButton(item) {
+    const trigger = button(tr("查看詳情"), () => openMilestoneDetails(item), "cal-detail-btn is-primary");
+    trigger.setAttribute("aria-haspopup", "dialog");
+    return trigger;
+  }
+
   function renderDayDetailPanel(items) {
     const weekdayEl = $("cal-day-weekday");
     const titleEl = $("cal-day-title");
@@ -713,8 +787,8 @@
         dot.style.backgroundColor = p.accent;
         courseBadge.append(dot, document.createTextNode(`${course.course_title} · ${week.label}`));
 
-        const typeTag = element("span", weekTypeLabel(week.week_type), "cal-detail-type");
-        if (week.week_type === "exam") {
+        const typeTag = element("span", calendarTypeLabel(item.eventType), "cal-detail-type");
+        if (item.eventType === "exam") {
           typeTag.style.backgroundColor = p.tint;
           typeTag.style.color = p.ink;
           typeTag.style.borderColor = p.border;
@@ -745,19 +819,21 @@
         }
 
         const actions = element("div", undefined, "cal-detail-actions");
+        const resourceClass = item.exam ? "cal-detail-btn" : "cal-detail-btn is-primary";
+        if (item.exam) actions.append(milestoneDetailsButton(item));
         if (week.materials?.length > 0) {
-          const openSlide = element("a", english() ? "Open slides" : "開啟本週講義", "cal-detail-btn is-primary");
+          const openSlide = element("a", english() ? "Open slides" : "開啟本週講義", resourceClass);
           openSlide.href = `/?course=${encodeURIComponent(course.id)}&doc=${encodeURIComponent(week.materials[0].id)}`;
           actions.append(openSlide);
         } else if (week.week_type !== "holiday") {
           const previewLink = element(
             "a",
-            week.week_type === "exam"
+            item.eventType === "exam"
               ? (english() ? "Exam review with BIIBO" : "請 BIIBO 規劃考前複習")
-              : week.week_type === "activity"
+              : item.eventType === "activity"
                 ? (english() ? "Prepare checklist" : "產生課堂準備清單")
                 : (english() ? "Pre-class preview" : "BIIBO 課前預習"),
-            "cal-detail-btn is-primary"
+            resourceClass
           );
           previewLink.href = `/?course=${encodeURIComponent(course.id)}&previewWeek=${encodeURIComponent(week.week_number)}`;
           actions.append(previewLink);
@@ -782,21 +858,16 @@
         dot.style.backgroundColor = p.accent;
         courseBadge.append(dot, document.createTextNode(`${course.course_title}${exam.week ? ` · Week ${exam.week}` : ""}`));
 
-        const typeTag = element("span", weekTypeLabel("exam"), "cal-detail-type");
+        const typeTag = element("span", calendarTypeLabel(item.eventType), "cal-detail-type");
         typeTag.style.backgroundColor = p.tint;
         typeTag.style.color = p.ink;
         typeTag.style.borderColor = p.border;
         head.append(courseBadge, typeTag);
 
         card.append(head, element("h4", exam.title, "cal-detail-title"));
-        if (exam.notes) card.append(element("p", exam.notes, "cal-detail-desc"));
 
         const actions = element("div", undefined, "cal-detail-actions");
-        if (course.overview_document_id) {
-          const ovLink = element("a", english() ? "Open overview note" : "開啟課程總覽筆記", "cal-detail-btn is-primary");
-          ovLink.href = `/?course=${encodeURIComponent(course.id)}&doc=${encodeURIComponent(course.overview_document_id)}`;
-          actions.append(ovLink);
-        }
+        actions.append(milestoneDetailsButton(item));
         actions.append(button(english() ? "Edit milestones" : "編輯時程", () => openCourseEditor(course, "exams"), "cal-detail-btn"));
         card.append(actions);
       } else if (item.kind === "custom") {
@@ -1365,6 +1436,13 @@
     renderCalendar();
   }
 
+  async function deleteCourse(courseId) {
+    const endpoint = `/api/courses/${encodeURIComponent(courseId)}`;
+    await parseJson(await api(endpoint, { method: "DELETE" }), endpoint);
+    await loadCoursesData();
+    if (typeof window.refreshSyllabusPlan === "function") await window.refreshSyllabusPlan();
+  }
+
   window.refreshCoursesView = async () => {
     if (!inCourses) return;
     await loadCoursesData();
@@ -1486,13 +1564,8 @@
     resetDeleteArm();
     btn.disabled = true;
     try {
-      await parseJson(
-        await api(`/api/courses/${encodeURIComponent(editorCourseId)}`, { method: "DELETE" }),
-        `/api/courses/${editorCourseId}`
-      );
+      await deleteCourse(editorCourseId);
       $("course-editor-dialog").close();
-      await loadCoursesData();
-      if (typeof window.refreshSyllabusPlan === "function") await window.refreshSyllabusPlan();
     } catch (error) {
       $("ce-status").textContent = friendlyError(error);
     } finally {

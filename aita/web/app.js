@@ -12,12 +12,13 @@ const state = {
   provider: "ollama",
   modelName: "",
   modelOnline: null,
+  modelCanChat: null,
   engines: [],
   draftProvider: "ollama",
   draftGroup: "local"
 };
 const labels = {pdf:"原始 PDF",note:"課程筆記",personal:"個人筆記",text:"文字教材"};
-const modes = {hint:"先給提示",concept:"解釋概念",debug:"協助除錯"};
+const modes = {hint:"先給提示",concept:"解釋概念",debug:"協助除錯",ask:"直接提問"};
 const json = data => ({headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
 
 const technicalErrorPattern = /unexpected token|not valid json|<!doctype|<html|syntaxerror|typeerror|referenceerror|failed to fetch|networkerror|load failed|econnrefused|enotfound|etimedout|aborterror|cannot read propert|undefined is not|json\.parse|fetch failed/i;
@@ -243,14 +244,20 @@ function showTurns() {
       const sources = element("div", undefined, "sources");
       for (const c of turn.citations) {
         const location = c.page ? "PDF " + pageLabel(c.page) : tr("教材段落");
-        const label = c.document_kind === "personal" ? tr("個人筆記") + " · " + location : location;
+        const isNote = c.document_kind === "personal" || c.document_kind === "note";
+        const label = isNote ? tr(c.document_kind === "personal" ? "個人筆記" : "課程筆記") : location;
         sources.append(button(c.label + " · " + label, () => openDocument(c.document_id, c)));
+        if (isNote && c.source_id && c.source_id !== c.document_id) {
+          const pages = [...new Set([c.page, ...(Array.isArray(c.related_pages) ? c.related_pages : [])].filter(page => Number.isInteger(page) && page > 0))];
+          for (const page of pages) sources.append(button(c.label + " · " + tr("筆記標示的原 PDF") + " " + pageLabel(page), () => openDocument(c.source_id, { page })));
+        }
       }
       const citation = turn.citations.find(c => c.source_id && (c.page || ["pdf", "note", "personal"].includes(c.document_kind)));
       sources.append(button(tr("加入到筆記"), () => noteFromTurn(turn, citation)));
       tutorBox.append(sources);
       const detail = element("details");
       detail.append(element("summary", tr("查看引用的內容")));
+      detail.append(element("p", tr("引用由模型選擇，請核對原文是否支持回答。")));
       for (const c of turn.citations) {
         const title = c.document_name && c.document_name !== c.source_name ? `${c.document_name} · ${c.source_name}` : c.source_name;
         detail.append(element("p", c.label + " · " + title), element("blockquote", c.excerpt));
@@ -259,16 +266,30 @@ function showTurns() {
     }
     if (turn.retrieved_evidence?.length) {
       const detail = element("details");
-      detail.append(element("summary", english() ? "View retrieved excerpts" : "查看檢索段落"));
+      const evidenceTitle = turn.evidence_in_model_request === true
+        ? "查看模型請求中的參考段落"
+        : turn.evidence_in_model_request === false
+          ? "查看未送出模型的檢索段落"
+          : "查看參考段落（傳送狀態未知）";
+      detail.append(element("summary", tr(evidenceTitle)));
       for (const c of turn.retrieved_evidence) {
         const location = c.page ? `${c.source_name} · ${pageLabel(c.page)}` : c.document_name;
         detail.append(button(location, () => openDocument(c.document_id, c)), element("blockquote", c.excerpt));
       }
       tutorBox.append(detail);
     }
-    if (turn.status !== "imported") tutorBox.append(element("div",
-      [tr(modes[turn.mode]), turn.retriever, turn.latency_ms == null ? "" : (turn.latency_ms / 1000).toFixed(2) + (english() ? " s" : " 秒")].filter(Boolean).join(" · "), "meta"));
+    if (turn.status !== "imported") {
+      const usage = [];
+      if (typeof turn.prompt_tokens === "number") usage.push(`${english() ? "Input" : "輸入"} ${turn.prompt_tokens} tokens`);
+      if (typeof turn.output_tokens === "number") usage.push(`${english() ? "Output" : "輸出"} ${turn.output_tokens} tokens`);
+      if (typeof turn.reasoning_tokens === "number") usage.push(`${english() ? "Reasoning" : "推理"} ${turn.reasoning_tokens} tokens`);
+      tutorBox.append(element("div",
+        [tr(modes[turn.mode]), turn.retriever, turn.search_scope, turn.latency_ms == null ? "" : (turn.latency_ms / 1000).toFixed(2) + (english() ? " s" : " 秒"), ...usage].filter(Boolean).join(" · "), "meta"));
+    }
     if (turn.warning) tutorBox.append(element("p", tr(turn.warning), "alert"));
+    if (turn.course_id === undefined && turn.status !== "imported") {
+      tutorBox.append(element("p", tr("此紀錄未標記課程，無法確認檢索範圍。"), "alert"));
+    }
     if (!turn.citations?.length && turn.status === "answered") tutorBox.append(button(tr("加入到筆記"), () => noteFromTurn(turn), "turn-note"));
     w.append(userBox, tutorBox);
     area.append(w);
@@ -352,10 +373,14 @@ bindForm("ask",async () => {
   ];
   let replied = false;
   try {
+    const courseId = $("search-scope").value === "course" ? ($("active-course")?.value || null) : null;
     const reply = await post("/api/ask",{
       question:questionText,conversation_id:state.conversation||null,
-      scope:state.selected||null,mode:$("mode").value
+      scope:state.selected||null,course_id:courseId,mode:$("mode").value
     });
+    if (courseId && reply.course_id !== courseId) {
+      reply.warning = [reply.warning, tr("伺服器未確認課程檢索範圍，請重新啟動後端。")].filter(Boolean).join(" ");
+    }
     replied = true;
     state.conversation = reply.conversation_id;
     state.turns.push(reply);
@@ -622,6 +647,9 @@ function renderModelBadge() {
   if (state.modelOnline === null) {
     badge.dataset.state = "checking";
     text.textContent = tr("偵測模型中…");
+  } else if (state.modelOnline && state.modelCanChat === false) {
+    badge.dataset.state = "offline";
+    text.textContent = `${label} · ${tr("不支援文字生成")}`;
   } else if (state.modelOnline) {
     const group = findEngine(state.provider)?.group;
     badge.dataset.state = group === "cli" || group === "cloud" ? "untested" : "online";
@@ -633,17 +661,29 @@ function renderModelBadge() {
   }
 }
 
+let badgeRequestSeq = 0;
 async function checkModelStatus() {
+  const seq = ++badgeRequestSeq;
+  const provider = state.provider;
+  const model = state.modelName;
   state.modelOnline = null;
+  state.modelCanChat = null;
   renderModelBadge();
   try {
     const data = await get("/api/engines");
+    if (seq !== badgeRequestSeq) return;
     if (Array.isArray(data?.engines)) {
       state.engines = data.engines;
     }
     const active = findEngine(state.provider);
     state.modelOnline = Boolean(active?.available);
+    if (state.modelOnline && provider === "ollama" && model) {
+      const capabilities = await get(`/api/runtime/capabilities?provider=ollama&model=${encodeURIComponent(model)}`).catch(() => null);
+      if (seq !== badgeRequestSeq) return;
+      state.modelCanChat = capabilities?.can_chat ?? null;
+    }
   } catch {
+    if (seq !== badgeRequestSeq) return;
     state.modelOnline = false;
   }
   renderModelBadge();
@@ -669,6 +709,18 @@ function syncCustomModelField() {
   if (isCustom && !input.value) {
     input.focus();
   }
+  syncModelReliability();
+}
+
+function syncModelReliability() {
+  const note = $("model-reliability-note");
+  const isSmallModel = state.draftProvider === "ollama" && /^qwen3\.5:(?:0\.8|2)b(?::latest)?$/i.test(getSelectedModelValue());
+  note.hidden = !isSmallModel;
+  note.textContent = isSmallModel
+    ? (english()
+      ? "Local tests found substantial errors with this model, even when relevant sources were retrieved. Consider a larger installed model and check citations."
+      : "本機測試中，此模型即使找到相關教材仍有重大錯誤。可考慮較大的已安裝模型，並核對引用。")
+    : "";
 }
 
 let cloudKeyProvider = "";
@@ -802,6 +854,7 @@ function selectEngineProvider(providerId, preferredModel = "") {
   }
   renderEngineProviderGrid();
   populateModelsForProvider(providerId, preferredModel);
+  refreshRuntimeLimit();
   $("settings-status").textContent = "";
 }
 
@@ -853,8 +906,70 @@ async function loadPreferences() {
   $("model").replaceChildren(new Option(p.model, p.model));
   $("retriever").value = p.retriever;
   $("response-language").value = p.language;
+  const runtime = p.runtime || { mode: "auto", context: 4096, output: 512, top_k: 3, temperature: 0 };
+  $("runtime-mode").value = runtime.mode;
+  for (const [id, key] of [["context", "context"], ["output", "output"], ["top-k", "top_k"], ["temperature", "temperature"]]) $("runtime-" + id).value = runtime[key];
+  syncRuntimeFields();
   checkModelStatus();
 }
+
+let runtimeRequest = 0;
+let detectedRuntimeLimit = null;
+let detectedOutputLimit = null;
+function syncRuntimeFields() {
+  const disabled = $("runtime-mode").value !== "advanced";
+  for (const id of ["context", "output", "top-k", "temperature"]) {
+    const input = $("runtime-" + id);
+    input.disabled = disabled;
+    const autoContext = Math.min(4096, detectedRuntimeLimit || 4096);
+    const autoValue = { context: autoContext, output: Math.min(512, Math.floor(autoContext / 2), detectedOutputLimit || 512), "top-k": "自動 2–5", temperature: 0 };
+    $("runtime-" + id + "-value").textContent = disabled ? String(autoValue[id]) : input.value;
+  }
+  const output = $("runtime-output");
+  const providerMax = detectedOutputLimit ? Math.max(128, Math.floor(detectedOutputLimit / 128) * 128) : 2048;
+  output.max = String(Math.min(2048, providerMax, Math.floor(Number($("runtime-context").value) / 256) * 128));
+  if (Number(output.value) > Number(output.max)) output.value = output.max;
+  if (!disabled) $("runtime-output-value").textContent = output.value;
+}
+
+async function refreshRuntimeLimit() {
+  const seq = ++runtimeRequest;
+  const model = getSelectedModelValue();
+  const provider = state.draftProvider || state.provider;
+  const note = $("runtime-capability");
+  if (!model) {
+    detectedRuntimeLimit = null;
+    detectedOutputLimit = null;
+    $("runtime-context").max = "32768";
+    note.textContent = "請先選擇模型 / Select a model first";
+    syncRuntimeFields();
+    return;
+  }
+  try {
+    const data = await get(`/api/runtime/capabilities?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`);
+    if (seq !== runtimeRequest) return;
+    detectedRuntimeLimit = data.context_limit || null;
+    detectedOutputLimit = data.output_limit || null;
+    const max = data.context_limit ? Math.max(1024, Math.min(32768, Math.floor(data.context_limit / 256) * 256)) : 32768;
+    $("runtime-context").max = String(max);
+    if (Number($("runtime-context").value) > max) $("runtime-context").value = String(max);
+    const contextNote = data.context_limit
+      ? `模型上限 / Model limit: ${data.context_limit} tokens${data.context_limit < 1024 ? " · 低於此介面的最小設定，可能無法送出問題 / Below minimum configurable context" : ""}`
+      : "模型上限未知 / Model context limit unknown";
+    note.textContent = [contextNote, data.can_chat === false ? "此模型不支援文字生成 / This model cannot generate text" : "", data.input_limit ? `輸入上限 / Input: ${data.input_limit}` : "", data.output_limit ? `輸出上限 / Output: ${data.output_limit}${data.output_limit < 128 ? " (低於介面最小值，實際依模型上限 / Actual output is capped)" : ""}` : ""].filter(Boolean).join(" · ");
+    syncRuntimeFields();
+  } catch {
+    if (seq === runtimeRequest) {
+      detectedRuntimeLimit = null;
+      detectedOutputLimit = null;
+      $("runtime-context").max = "32768";
+      note.textContent = "無法偵測模型上限 / Could not detect model limit";
+      syncRuntimeFields();
+    }
+  }
+}
+$("runtime-mode").addEventListener("change", syncRuntimeFields);
+for (const id of ["context", "output", "top-k", "temperature"]) $("runtime-" + id).addEventListener("input", syncRuntimeFields);
 
 async function detectModels(preserveSelection = false) {
   const seq = ++detectRequestSeq;
@@ -889,6 +1004,7 @@ async function detectModels(preserveSelection = false) {
     }
     renderEngineProviderGrid();
     populateModelsForProvider(targetProvider, prevModel);
+    refreshRuntimeLimit();
     status.textContent = "";
   } catch (error) {
     if (seq !== detectRequestSeq) return;
@@ -917,10 +1033,13 @@ $("model")?.addEventListener("change", () => {
   syncCustomModelField();
   syncCliOptions();
   syncAllCustomSelects();
+  refreshRuntimeLimit();
 });
 $("custom-model").addEventListener("input", () => {
+  syncModelReliability();
   syncCliOptions();
   syncAllCustomSelects();
+  refreshRuntimeLimit();
 });
 $("cli-options").addEventListener("change", () => {
   draftCliOptions[state.draftProvider] = readDraftCliOptions();
@@ -981,8 +1100,10 @@ $("test-engine")?.addEventListener("click", async () => {
 
 function openSettings() {
   draftCliOptions = { ...savedCliOptions };
+  $("runtime-settings").open = false;
   $("settings-dialog").showModal();
   detectModels(false);
+  refreshRuntimeLimit();
 }
 $("settings-open").addEventListener("click", openSettings);
 $("settings-dialog").addEventListener("close", () => { $("cloud-key").value = ""; });
@@ -1005,7 +1126,8 @@ bindForm("settings-form", async () => {
       api_key: draftCloudKey(provider),
       cli_options: readDraftCliOptions(),
       retriever: $("retriever").value,
-      language: $("response-language").value
+      language: $("response-language").value,
+      runtime: { mode: $("runtime-mode").value, context: Number($("runtime-context").value), output: Number($("runtime-output").value), top_k: Number($("runtime-top-k").value), temperature: Number($("runtime-temperature").value) }
     })
   }), "/api/settings");
   state.provider = provider;

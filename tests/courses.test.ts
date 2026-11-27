@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
-import {
+import { after, test } from 'node:test';
+
+const originalCwd = process.cwd();
+const suiteRoot = process.env.BIIBO_SUITE_ROOT;
+const sandbox = fs.mkdtempSync(path.join(suiteRoot || os.tmpdir(), 'biibo-courses-test-'));
+process.chdir(sandbox);
+const {
   COURSE_PALETTE,
   createCalendarEvent,
   createManualCourse,
@@ -14,8 +20,16 @@ import {
   updateCalendarEvent,
   updateCalendarSettings,
   updateFullCourse,
-} from '../src/courses.js';
-import { loadStore, persistStoreNow, store } from '../src/store.js';
+} = await import('../src/courses.js');
+const { loadStore, persistStoreNow, store } = await import('../src/store.js');
+
+after(() => {
+  process.chdir(originalCwd);
+  if (!suiteRoot) {
+    assert.ok(sandbox.startsWith(path.join(os.tmpdir(), 'biibo-courses-test-')));
+    fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
 
 const STORE_FILE = path.join(process.cwd(), 'data', 'biibo-store.json');
 

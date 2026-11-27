@@ -4,7 +4,7 @@
 
 > **A local-first personal AI tutor and course workspace for students and researchers** — uniting PDF reading, MinerU structured parsing, automated syllabus planning, page-cited Socratic Q&A, Markdown/KaTeX note-taking, and self-test quizzes on your own machine.
 
-BIIBO solves the fragmented study workflow where lecture slides, PDFs, notes, and AI chats live in disconnected tools. Everything stays organized by course and physical PDF page, with every answer and quiz question grounded in clickable citations back to the original material.
+BIIBO brings lecture slides, PDFs, notes, and AI chats into one workspace. Course materials and answers can be linked to their original pages. Citation labels identify supplied passages; they do not guarantee that an answer is correct or supported by the passage.
 
 ---
 
@@ -28,9 +28,15 @@ Upload a syllabus (PDF, screenshot, clipboard image `Ctrl+V`/`Cmd+V`, Markdown, 
 
 ![Automated Syllabus Overview & Weekly Preview](docs/demo/syllabus-preview.png)
 
-### 3. Page-Cited AI Tutor (Socratic Hints, Concepts & Debugging)
+### 3. Page-Cited AI Tutor (Hints, Concepts, Debugging & Ask)
 
-Click **Ask this page** or highlight any passage to ask BIIBO in **Hint**, **Concept**, or **Debug** mode. Responses include numbered inline citations (`S1`, `S2`, ...) that jump straight to the exact PDF page, expandable source excerpts, and one-click saving into your personal notes.
+Click **Ask this page** or highlight any passage to ask BIIBO in **Hint**, **Concept**, **Debug**, or **Ask** mode. When evidence is available, answers may include citations (`S1`, `S2`, ...) and expandable excerpts. Check the excerpt against the answer; when evidence is insufficient, the tutor may abstain.
+
+Settings includes an optional advanced section for context, output limit, retrieval Top-k, and temperature. Auto mode chooses a candidate count based on the context budget and question length. Ollama limits are read from local metadata; when a Gemini key is configured, its separate input and output limits are requested from Google. Unavailable limits are reported as unknown. The input budget uses UTF-8 bytes and reserved space as an estimate, not a model tokenizer, so provider limits cannot be guaranteed. Older conversation turns that do not fit are omitted with a warning. CLI tools control their own output length and temperature. Citations still require checking against their sources.
+
+PDF page numbers are displayed only when that page exists among the source document's parsed blocks; otherwise the citation is shown as a passage with a warning. Notes can link to explicitly mentioned, existing single PDF pages; page ranges are not expanded. Page existence does not establish semantic support or complete multi-page provenance. Some providers or models may ignore parameters such as temperature.
+
+When Ollama explicitly reports an embedding-only model, Settings warns that it cannot generate text and tutor requests ask for a generation model. Missing capability metadata is treated as unknown.
 
 | Thinking Progress Display | Grounded Citations & Excerpts |
 | :---: | :---: |
@@ -122,6 +128,10 @@ npm run start
 ollama pull bge-m3
 ```
 
+The default `qwen3.5:0.8b` is a lightweight starting point, but local tests found serious factual errors even with relevant evidence. For comparison, this workspace tested `qwen3.5:9b-q4_K_M` with Hybrid retrieval; it needs more memory and can still make mistakes. If your hardware supports it, install it with `ollama pull qwen3.5:9b-q4_K_M`, then select it and Hybrid in Settings. Existing saved preferences are not changed automatically.
+
+Run only one BIIBO server against the same `data/` directory. After updating backend code, stop the existing server from its terminal and start it again from the project root; refreshing the browser alone does not reload the backend.
+
 3. **Open BIIBO** in your browser:
 
 ```text
@@ -164,6 +174,8 @@ bun run build
 bun run test
 # or: npm run build && npm test
 ```
+
+Tests run in an isolated temporary data directory. If referenced local files are missing, the server refuses to start to prevent further data loss; restore the missing files from a backup.
 
 ---
 
